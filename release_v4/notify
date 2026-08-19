@@ -1,0 +1,476 @@
+#!/bin/bash
+# Claude Notify - unified CLI and handler.
+#
+# Called by:
+#   Claude Code hooks:   notify refresh  (SessionStart)
+#                        notify update CLAUDE_STATE <value>  (PreToolUse/Stop/Notification)
+#                        notify wipe  (SessionEnd)
+#   tmux pane switch:    notify user-focus
+#   tmux menu / CLI:     notify status|update|wipe|refresh|<renderer> [--all|--global]
+#   init:                notify init  (symlink + tmux hooks, idempotent)
+#
+# Renderers live one per folder in renderers.d/<name>/, each with its own
+# executable (renderers.d/<name>/main) and its own settings.json (unwrapped
+# - just that renderer's own block, no "<name>" key needed).
+
+# --- shared variables and functions ----------------------
+
+NOTIFY_USER="${USER:-$(whoami)}"
+ROOT_DATA_DIR="/tmp/claude-notify-$NOTIFY_USER"
+NOTIFY_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+RENDERERS_DIR="$NOTIFY_DIR/renderers.d"
+mkdir -p "$ROOT_DATA_DIR"
+
+##### Logger
+# Exported so every renderer subprocess inherits it directly - a renderer's
+# own rlog() just calls this with its name as part of the message prefix,
+# instead of reimplementing the timestamp/printf/redirect logic itself.
+log() { local pid="$1" msg="$2"; printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$pid" "$msg" >> "$ROOT_DATA_DIR/notify.log" 2>/dev/null; }
+export -f log
+
+##### Command Helpers #####
+
+read_and_export_static() {
+  local RENDER_PID="$1"
+  SESSION_DATA_DIR="$ROOT_DATA_DIR/$RENDER_PID"
+  [ -f "$SESSION_DATA_DIR/static.env" ] && source "$SESSION_DATA_DIR/static.env"
+  export SESSION_DATA_DIR SHELL_PID CLAUDE_UUID CLAUDE_WD CLAUDE_PID SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION
+}
+
+read_and_export_state() {
+  local RENDER_PID="$1"
+  SESSION_DATA_DIR="$ROOT_DATA_DIR/$RENDER_PID"
+  CLAUDE_STATE=""
+  USER_STATE=""
+  [ -f "$SESSION_DATA_DIR/state.env" ] && source "$SESSION_DATA_DIR/state.env"
+  export CLAUDE_STATE USER_STATE
+}
+
+resolve_client_tty() {
+  CLIENT_TTY=""
+  if [ -n "$SESSION_TMUX_SESSION" ]; then
+    CLIENT_TTY=$(tmux list-clients -t "$SESSION_TMUX_SESSION" -F '#{client_activity} #{client_tty}' 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
+  fi
+  # Fall back to the PID-based lookup whenever the tmux-based one above didn't
+  # produce a tty - not only when SESSION_TMUX_SESSION was unset (this used to
+  # be an elif). A stale SESSION_TMUX_SESSION - e.g. after a
+  # `tmux rename-session` before this session's static.env got refreshed, see
+  # cmd_refresh - makes `tmux list-clients -t <stale name>` fail silently,
+  # which previously left CLIENT_TTY empty with no recovery.
+  if [ -z "$CLIENT_TTY" ] && [ -n "$SHELL_PID" ] && [ "$SHELL_PID" != "-" ]; then
+    # "ps -o tty=" works on both macOS (BSD ps) and Linux (GNU ps); /proc doesn't exist on macOS.
+    local _tty_name
+    _tty_name=$(ps -o tty= -p "$SHELL_PID" 2>/dev/null | tr -d ' ')
+    [ -n "$_tty_name" ] && [ "$_tty_name" != "??" ] && CLIENT_TTY="/dev/$_tty_name"
+  fi
+  export CLIENT_TTY
+}
+
+# Assembles the combined { "<renderer>": {...}, ... } settings object:
+# for each renderer, its own renderers.d/<name>/settings.json merged with
+# that renderer's session override file, if one exists.
+resolve_renderer_settings() {
+  local RENDER_PID="$1"
+  local session_renderers_dir="$ROOT_DATA_DIR/$RENDER_PID/renderers.d"
+
+  RENDERER_SETTINGS='{}'
+  local dir renderer content ofile
+  for dir in "$RENDERERS_DIR"/*/; do
+    renderer="$(basename "$dir")"
+    [ -x "$dir/main" ] || continue
+    content='{}'
+    [ -f "$dir/settings.json" ] && content=$(cat "$dir/settings.json")
+    ofile="$session_renderers_dir/$renderer/settings.json"
+    [ -f "$ofile" ] && content=$(jq -s '.[0] * .[1]' <(printf '%s' "$content") "$ofile" 2>/dev/null)
+    RENDERER_SETTINGS=$(echo "$RENDERER_SETTINGS" | jq --arg r "$renderer" --argjson v "$content" '.[$r] = $v' 2>/dev/null)
+  done
+  export RENDERER_SETTINGS
+}
+
+call_all_renderers() {
+  local RENDER_PID="$1"
+  case "$2" in
+    CLAUDE_STATE) export TRIGGER="CLAUDE_STATE_UPDATE" ;;
+    USER_STATE)   export TRIGGER="USER_STATE_UPDATE" ;;
+    *)            export TRIGGER="$2" ;;
+  esac
+  export RENDER_PID ROOT_DATA_DIR SESSION_DATA_DIR
+  resolve_client_tty
+  resolve_renderer_settings "$RENDER_PID"
+  local renderer enabled
+  for renderer in $(echo "$RENDERER_SETTINGS" | jq -r 'keys[]'); do
+    [ -x "$RENDERERS_DIR/$renderer/main" ] || continue
+    enabled=$(echo "$RENDERER_SETTINGS" | jq -r --arg r "$renderer" 'if .[$r] | has("enabled") then .[$r].enabled else true end')
+    if [ "$enabled" = "false" ]; then
+      log "$RENDER_PID" "RENDER $TRIGGER $renderer skip (disabled)"
+      continue
+    fi
+    log "$RENDER_PID" "RENDER $TRIGGER $renderer"
+    "$RENDERERS_DIR/$renderer/main"
+  done
+}
+
+update_state_and_render() {
+  local RENDER_PID="$1" key="$2" val="$3" force="${4:-false}"
+  local session_dir="$ROOT_DATA_DIR/$RENDER_PID"
+
+  # Read once. Load Disk vals, and new vals
+  read_and_export_state "$RENDER_PID"
+  CLAUDE_STATE_DISK="$CLAUDE_STATE"
+  USER_STATE_DISK="$USER_STATE"
+  printf -v "$key" '%s' "$val" # Assign "$val" to the variable named in "$key" (safer than eval)
+
+  # Guardrails
+  # Changing claude state: move user state back to pending, except if manually put on hold
+  if [ "$CLAUDE_STATE_DISK" != "$CLAUDE_STATE" ] && [ "$USER_STATE_DISK" != "OnHold" ]; then
+    USER_STATE="Pending"
+  fi
+  # Never downgrade a user state from acknowledged to seen
+  if [ "$USER_STATE_DISK" = "Acknowledged" ] && [ "$USER_STATE" = "Seen" ]; then
+    USER_STATE="$USER_STATE_DISK"
+  fi
+  # Never downgrade an on-hold state to seen or acknowledged via an AUTOMATIC
+  # update (tmux pane/window focus - see the `user-focus` case, which always
+  # calls this with force=false, i.e. unset/default) - that's the whole point
+  # of OnHold: glancing at or clicking through panes shouldn't clear it.
+  # force=true (only cmd_update_state passes it - the `update` subcommand
+  # behind both the tmux popup menu and manual `notify update USER_STATE ...`)
+  # bypasses ONLY this one guardrail, not the others above: it means "this is
+  # a deliberate human request for this exact value, not an automatic side
+  # effect" and must be allowed to leave OnHold, or picking "Acknowledge" from
+  # the menu while on hold would silently do nothing.
+  if [ "$force" != "true" ] && [ "$USER_STATE_DISK" = "OnHold" ] && { [ "$USER_STATE" = "Seen" ] || [ "$USER_STATE" = "Acknowledged" ]; }; then
+    USER_STATE="$USER_STATE_DISK"
+  fi
+
+  # No-change check
+  if [ "$CLAUDE_STATE" = "$CLAUDE_STATE_DISK" ] && [ "$USER_STATE" = "$USER_STATE_DISK" ] ; then
+    return 1
+  fi
+
+  # Write update to file
+  echo "CLAUDE_STATE=$CLAUDE_STATE" > "$session_dir/state.env"
+  echo "USER_STATE=$USER_STATE" >> "$session_dir/state.env"
+
+  # Render
+  read_and_export_static "$RENDER_PID"
+  call_all_renderers "$RENDER_PID" "$key"
+}
+
+# --- commands --------------------------------------------
+
+cmd_refresh() {
+  local RENDER_PID="$1"
+  local session_dir="$ROOT_DATA_DIR/$RENDER_PID"
+  log "$RENDER_PID" "refresh"
+
+  read_and_export_static "$RENDER_PID"
+
+  # 1. We are NOT refreshing the current PID ? --> Wipe if Dead Session
+  if [ "$RENDER_PID" != "$CURRENT_PID" ]; then
+    if ! kill -0 "$RENDER_PID" 2>/dev/null; then
+      log "$RENDER_PID" "PRUNED dead"
+      rm -rf "$session_dir"
+      return
+    fi
+
+  # 2. We are refreshing the current PID ? --> Refresh Claude/tmux-pane statics
+  #
+  # `refresh --all` calls cmd_refresh once per session dir, but from a SINGLE
+  # process - so $PWD / $TMUX_PANE / $CLAUDE_CODE_SESSION_ID always describe
+  # whichever session happened to trigger the loop, never the RENDER_PID
+  # currently being iterated. Applying them to another session's PID would
+  # silently corrupt that session's CLAUDE_UUID/CLAUDE_WD/SESSION_TMUX_PANE
+  # with the invoker's own - so 2.1/2.2 below must stay gated to CURRENT_PID.
+  else
+    # 2.1 If we have Claude infos (run inside Claude) --> Detect UUID mismatch + Refresh Claude statics
+    if [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
+      if [ -n "$CLAUDE_UUID" ] && [ "$CLAUDE_UUID" != "$CLAUDE_CODE_SESSION_ID" ]; then
+        log "$RENDER_PID" "stale session (OLD CLAUDE_UUID=$CLAUDE_UUID), wiping"
+        rm -rf "$session_dir"
+        read_and_export_static "$RENDER_PID" # Reset statics
+      fi
+      CLAUDE_PID=$(ps --ppid "$RENDER_PID" -o pid= -o comm= 2>/dev/null | awk '$2=="claude"{print $1; exit}')
+      CLAUDE_UUID="$CLAUDE_CODE_SESSION_ID"
+      CLAUDE_WD="$PWD"
+    fi
+    # 2.2 If we have TMUX_PANE loaded by Tmux, refresh it
+    if [ -n "$TMUX_PANE" ]; then
+        SESSION_TMUX_PANE="$TMUX_PANE"
+    fi
+  fi
+
+  # 3. Re-derive SESSION_TMUX_SESSION/WINDOW from SESSION_TMUX_PANE, for ANY
+  # RENDER_PID - including under `refresh --all`, unlike 2.1/2.2 above. This is
+  # safe because SESSION_TMUX_PANE at this point is either RENDER_PID's own
+  # value loaded from disk by read_and_export_static (top of this function),
+  # or, for CURRENT_PID, just-refreshed in 2.2 - either way it's the correct
+  # pane for THIS session, never the invoker's. tmux pane IDs (%N) are global
+  # identifiers any process can query regardless of who's asking, so this is
+  # what keeps SESSION_TMUX_SESSION/WINDOW from going stale after a
+  # `tmux rename-session`. Before this was pulled out of the CURRENT_PID-only
+  # branch, only CURRENT_PID's session/window ever got re-derived, so every
+  # OTHER session's tmux-based renderers (terminal-title, sound-bell,
+  # sound-tts - anything going through resolve_client_tty) would silently stop
+  # working after a rename, since `tmux list-clients -t <stale name>` fails
+  # with no fallback (see notify.log investigation, SHELL_PID 78830, 2026-08-18).
+  if [ -n "$SESSION_TMUX_PANE" ]; then
+    SESSION_TMUX_SESSION=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#S' 2>/dev/null)
+    SESSION_TMUX_WINDOW=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#{window_id}' 2>/dev/null)
+  fi
+
+  # 4. Write on Disk
+  mkdir -p "$session_dir"
+  f="$session_dir/static.env"
+  echo "TIMESTAMP=$(date '+%Y-%m-%dT%H:%M:%S')" > "$f"
+  echo "SHELL_PID=$RENDER_PID" >> "$f"
+  echo "CLAUDE_UUID=$CLAUDE_UUID" >> "$f"
+  echo "CLAUDE_WD=$CLAUDE_WD" >> "$f"
+  echo "CLAUDE_PID=$CLAUDE_PID" >> "$f"
+  echo "SESSION_TMUX_PANE=$SESSION_TMUX_PANE" >> "$f"
+  echo "SESSION_TMUX_WINDOW=$SESSION_TMUX_WINDOW" >> "$f"
+  echo "SESSION_TMUX_SESSION=$SESSION_TMUX_SESSION" >> "$f"
+
+  # 5. Refresh Renderers
+  read_and_export_state "$RENDER_PID"
+  call_all_renderers "$RENDER_PID" "REFRESH"
+}
+
+cmd_status() {
+  local RENDER_PID="$1"
+  [ -n "$CMD_ARG1" ] && { echo "Usage: notify status [--all]  (to change a value, use: notify update <CLAUDE_STATE|USER_STATE> <value>, or notify <renderer> ...)"; exit 1; }
+  [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
+
+  read_and_export_static "$RENDER_PID"
+  read_and_export_state "$RENDER_PID"
+  resolve_client_tty
+
+  echo "== General =="
+  printf "  RENDER_PID    %s\n" "$RENDER_PID"
+  printf "  CLAUDE_STATE  %s\n" "${CLAUDE_STATE:-(none)}"
+  printf "  USER_STATE    %s\n" "${USER_STATE:-(none)}"
+  printf "  CLAUDE_UUID   %s\n" "${CLAUDE_UUID:-(none)}"
+  printf "  CLAUDE_WD     %s\n" "${CLAUDE_WD:-(none)}"
+  printf "  CLAUDE_PID    %s\n" "${CLAUDE_PID:-(none)}"
+  printf "  TMUX_SESSION  %s\n" "${SESSION_TMUX_SESSION:-(none)}"
+  printf "  TMUX_PANE     %s\n" "${SESSION_TMUX_PANE:-(none)}"
+  printf "  CLIENT_TTY    %s\n" "${CLIENT_TTY:-(none)}"
+
+  export RENDER_PID ROOT_DATA_DIR SESSION_DATA_DIR
+  resolve_renderer_settings "$RENDER_PID"
+
+  local session_renderers_dir="$ROOT_DATA_DIR/$RENDER_PID/renderers.d"
+  local dir renderer ofile out enabled state_label
+  for dir in "$RENDERERS_DIR"/*/; do
+    renderer="$(basename "$dir")"
+    [ -x "$dir/main" ] || continue
+    ofile="$session_renderers_dir/$renderer/settings.json"
+    enabled=$(echo "$RENDERER_SETTINGS" | jq -r --arg r "$renderer" 'if .[$r] | has("enabled") then .[$r].enabled else true end')
+    state_label="enabled"; [ "$enabled" = "false" ] && state_label="disabled"
+
+    echo
+    echo "== $renderer: $state_label =="
+    echo "  -- Global --"
+    printf "  %s\n" "$([ -f "$dir/settings.json" ] && jq -c . "$dir/settings.json" 2>/dev/null || echo '{}')"
+    if [ -f "$ofile" ]; then
+      echo "  -- Override --"
+      printf "  %s\n" "$(jq -c . "$ofile" 2>/dev/null)"
+    fi
+    # Opt-in: a renderer may implement a STATUS case to print computed info
+    # (e.g. sound-tts prints the name it would speak and why). Most
+    # renderers don't implement it - harmless no output.
+    out=$(TRIGGER=STATUS "$dir/main" 2>/dev/null)
+    if [ -n "$out" ]; then
+      echo "  -- Status --"
+      echo "$out" | sed 's/^/  /'
+    fi
+  done
+}
+
+cmd_update_state() {
+  local RENDER_PID="$1"
+  case "$CMD_ARG1" in
+    CLAUDE_STATE|USER_STATE) ;;
+    *) echo "Usage: notify update <CLAUDE_STATE|USER_STATE> <value> [--all]"; exit 1 ;;
+  esac
+  [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
+  [ -z "$CMD_ARG2" ] && { echo "Usage: notify update <CLAUDE_STATE|USER_STATE> <value> [--all]"; exit 1; }
+  log "$RENDER_PID" "update $CMD_ARG1 $CMD_ARG2"
+  # force=true: this command is a direct, deliberate request (CLI or tmux
+  # menu), not an automatic side effect - see the OnHold guardrail comment
+  # in update_state_and_render.
+  update_state_and_render "$RENDER_PID" "$CMD_ARG1" "$CMD_ARG2" true
+}
+
+cmd_wipe() {
+  local RENDER_PID="$1"
+  [ -d "$ROOT_DATA_DIR/$RENDER_PID" ] || return
+  log "$RENDER_PID" "wipe"
+  read_and_export_static "$RENDER_PID"
+  rm -rf "$ROOT_DATA_DIR/$RENDER_PID"
+  CLAUDE_STATE=""
+  USER_STATE=""
+  export CLAUDE_STATE USER_STATE
+  call_all_renderers "$RENDER_PID" "REFRESH"
+  log "$RENDER_PID" "cleaned up"
+}
+
+# Bare renderer name is the command itself, e.g. `notify sound-tts enable`.
+# CMD is the renderer name, CMD_ARG1 the action (on/off/enable/disable/key=val),
+# CMD_ARG2 + CMD_EXTRA_ARGS any further key=val pairs.
+#
+# --global writes DIRECTLY to that renderer's own renderers.d/<name>/settings.json.
+# Without --global, writes to that renderer's own settings.json under the
+# session's renderers.d/<name>/ dir - same layout as the source tree, one
+# directory per renderer, so a renderer can drop other per-session files of
+# its own there later without needing a new convention. Both settings.json
+# files are unwrapped (just the renderer's own keys) and the same shape.
+cmd_settings() {
+  local renderer="$CMD"
+  if [ ! -x "$RENDERERS_DIR/$renderer/main" ]; then
+    echo "Unknown command or renderer: $renderer"
+    echo "Usage: notify <init|user-focus|status|wipe|update|refresh|<renderer>> [args...] [--all|--global]"
+    exit 1
+  fi
+
+  local target
+  if [ "$1" = "_global" ]; then
+    target="$RENDERERS_DIR/$renderer/settings.json"
+  else
+    RENDER_PID="$1"
+    [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
+    mkdir -p "$ROOT_DATA_DIR/$RENDER_PID/renderers.d/$renderer"
+    target="$ROOT_DATA_DIR/$RENDER_PID/renderers.d/$renderer/settings.json"
+  fi
+  [ -f "$target" ] || echo '{}' > "$target" # Create file if not exist
+
+  if [ -z "$CMD_ARG1" ]; then
+    cat "$target" # No action --> Just show
+    return
+  fi
+
+  case "$CMD_ARG1" in
+    on|enable)   local action="enabled=true" ;;
+    off|disable) local action="enabled=false" ;;
+    *)           local action="$CMD_ARG1" ;;
+  esac
+  for kv in "$action" "$CMD_ARG2" "${CMD_EXTRA_ARGS[@]}"; do
+    [[ "$kv" == *=* ]] || continue
+    local k="${kv%%=*}" v="${kv#*=}"
+    if echo "$v" | grep -qE '^[0-9]+$|^true$|^false$'; then
+      jq --arg k "$k" --argjson v "$v" '.[$k] = $v' "$target" > "$target.tmp" && mv "$target.tmp" "$target"
+    else
+      jq --arg k "$k" --arg v "$v" '.[$k] = $v' "$target" > "$target.tmp" && mv "$target.tmp" "$target"
+    fi
+    log "${RENDER_PID:--}" "settings $renderer.$k=$v"
+  done
+
+  # Refresh render (if not a change of the global settings)
+  if [ -n "$RENDER_PID" ]; then
+    read_and_export_static "$RENDER_PID"
+    read_and_export_state "$RENDER_PID"
+    call_all_renderers "$RENDER_PID" "REFRESH"
+  fi
+}
+
+# --- scope resolution + dispatch -----------------------------------
+
+ALL=false
+GLOBAL=false
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in --all) ALL=true ;; --global) GLOBAL=true ;; *) ARGS+=("$arg") ;; esac
+done
+CMD="${ARGS[0]:-status}"
+CMD_ARG1="${ARGS[1]:-}"
+CMD_ARG2="${ARGS[2]:-}"
+CMD_EXTRA_ARGS=("${ARGS[@]:3}")
+
+CURRENT_PID=""
+_fallback_pid=""
+walk_pid=$PPID
+while [ -n "$walk_pid" ] && [ "$walk_pid" -gt 1 ]; do
+  walk_cmd=$(ps -o comm= -p "$walk_pid" 2>/dev/null | tr -d ' ')
+  walk_cmd="${walk_cmd##*/}" # non-login shells can report a full path, e.g. "/bin/zsh"
+  walk_cmd="${walk_cmd#-}" # login shells report as "-zsh", "-bash", etc.
+  case "$walk_cmd" in
+    bash|zsh|sh|fish|dash|tcsh|csh)
+      _fallback_pid="$walk_pid"
+      if [ -d "$ROOT_DATA_DIR/$walk_pid" ]; then
+        CURRENT_PID="$walk_pid"
+        break
+      fi
+      ;;
+  esac
+  walk_pid=$(ps -o ppid= -p "$walk_pid" 2>/dev/null | tr -d ' ')
+done
+[ -z "$CURRENT_PID" ] && CURRENT_PID="$_fallback_pid"
+if [ -z "$CURRENT_PID" ] && [ -n "$TMUX_PANE" ]; then
+  _pane_pid=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_pid}' 2>/dev/null)
+  [ -n "$_pane_pid" ] && [ -d "$ROOT_DATA_DIR/$_pane_pid" ] && CURRENT_PID="$_pane_pid"
+fi
+
+resolve_and_run() {
+  local callback="$1"
+  if $ALL; then
+    for d in "$ROOT_DATA_DIR"/[0-9]*/; do
+      [ -f "$d/static.env" ] && $callback "$(basename "$d")"
+    done
+  else
+    [ -z "$CURRENT_PID" ] && { echo "No active session found."; exit 1; }
+    $callback "$CURRENT_PID"
+  fi
+}
+
+case "$CMD" in
+  user-focus)
+    focus_pane="${TMUX_PANE:-}"
+    [ -z "$focus_pane" ] && exit 0
+    while IFS= read -r line; do
+      local_pane_id=$(echo "$line" | awk '{print $1}')
+      local_render_pid=$(echo "$line" | awk '{print $2}')
+      [ -z "$local_render_pid" ] && continue
+      [ -f "$ROOT_DATA_DIR/$local_render_pid/static.env" ] || continue
+      if [ "$local_pane_id" = "$focus_pane" ]; then
+        update_state_and_render "$local_render_pid" "USER_STATE" "Acknowledged" \
+          && log "$local_render_pid" "tmux.focus.Acknowledged pane=$local_pane_id"
+      else
+        update_state_and_render "$local_render_pid" "USER_STATE" "Seen" \
+          && log "$local_render_pid" "tmux.focus.Seen pane=$local_pane_id"
+      fi
+    done < <(tmux list-panes -F '#{pane_id} #{pane_pid}' 2>/dev/null)
+    ;;
+  init)
+    SYMLINK="$HOME/.local/bin/notify"
+    if [ "$(readlink -f "$SYMLINK" 2>/dev/null)" != "$(readlink -f "$0")" ]; then
+      mkdir -p "$HOME/.local/bin"
+      ln -sf "$(readlink -f "$0")" "$SYMLINK"
+    fi
+    TMUX_CONF="$HOME/.tmux.conf"
+    MARKER="### claude-notify BEGIN ###"
+    if command -v tmux >/dev/null 2>&1 && ! grep -qF "$MARKER" "$TMUX_CONF" 2>/dev/null; then
+      printf '\n' >> "$TMUX_CONF"
+      cat "$NOTIFY_DIR/tmux/tmux-hooks.conf" >> "$TMUX_CONF"
+      tmux source-file "$TMUX_CONF" 2>/dev/null
+    fi
+    ;;
+  status|s)  resolve_and_run cmd_status ;;
+  wipe)      resolve_and_run cmd_wipe ;;
+  update)    resolve_and_run cmd_update_state ;;
+  refresh)   resolve_and_run cmd_refresh ;;
+  *)
+    # Anything else is assumed to be a renderer name, e.g. `notify sound-tts enable`.
+    if $GLOBAL; then cmd_settings "_global"
+    else resolve_and_run cmd_settings; fi ;;
+esac
+
+# --- debounced refresh (runs after every invocation) -----
+
+_last_refresh_file="$ROOT_DATA_DIR/.last_refresh"
+_now_epoch=$(date '+%s')
+_last_refresh=0
+[ -f "$_last_refresh_file" ] && _last_refresh=$(cat "$_last_refresh_file" 2>/dev/null)
+if [ $((_now_epoch - _last_refresh)) -ge 300 ]; then
+  echo "$_now_epoch" > "$_last_refresh_file"
+  "$0" refresh --all &
+fi

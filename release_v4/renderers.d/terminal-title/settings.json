@@ -1,0 +1,10 @@
+{
+  "Working": "🔵",
+  "WaitingForUser": "🟡",
+  "Finished.Pending": "🟢",
+  "Finished.Seen": "⚪",
+  "Finished.OnHold": "🟣",
+  "Idle.Pending": "🟢",
+  "Idle.Seen": "⚪",
+  "Idle.OnHold": "🟣"
+}

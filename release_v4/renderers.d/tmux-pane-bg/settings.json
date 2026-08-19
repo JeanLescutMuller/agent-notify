@@ -1,0 +1,8 @@
+{
+  "Working": "#0a1028",
+  "WaitingForUser": "#2e2e0a",
+  "Finished.Pending": "#0a2e0a",
+  "Finished.OnHold": "#200a1a",
+  "Idle.Pending": "#0a2e0a",
+  "Idle.OnHold": "#200a1a"
+}

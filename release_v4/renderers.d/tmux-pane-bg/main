@@ -1,0 +1,41 @@
+#!/bin/bash
+# Renderer: tmux-pane-bg
+# Tmux pane background color based on claude and user state.
+
+rlog() { log "${RENDER_PID:--}" "    tmux-pane-bg: $1"; }
+
+resolve_color() {
+  local cs="$1" us="$2"
+  local color
+  color=$(echo "$RENDERER_SETTINGS" | jq -r ".\"tmux-pane-bg\".\"$cs.$us\" // empty")
+  [ -n "$color" ] && { echo "$color"; return; }
+  color=$(echo "$RENDERER_SETTINGS" | jq -r ".\"tmux-pane-bg\".\"$cs\" // empty")
+  [ -n "$color" ] && { echo "$color"; return; }
+  echo "default"
+}
+
+render_pane_bg() {
+  local pane="$1" color="$2"
+  rlog "set_pane_bg pane=$pane color=$color"
+  if [ "$color" = "default" ]; then
+    tmux set-option -p -t "$pane" -u window-style 2>/dev/null
+    tmux set-option -p -t "$pane" -u window-active-style 2>/dev/null
+  else
+    tmux set-option -p -t "$pane" window-style "bg=$color" 2>/dev/null
+    tmux set-option -p -t "$pane" window-active-style "bg=$color" 2>/dev/null
+  fi
+}
+
+case "$TRIGGER" in
+  CLAUDE_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
+    [ -n "$SESSION_TMUX_PANE" ] || { rlog "skip (no pane)"; exit 0; }
+    if [ -z "$CLAUDE_STATE" ]; then
+      rlog "reset (no claude state) pane=$SESSION_TMUX_PANE"
+      render_pane_bg "$SESSION_TMUX_PANE" "default"
+      exit 0
+    fi
+    color=$(resolve_color "$CLAUDE_STATE" "$USER_STATE")
+    rlog "trigger=$TRIGGER pane=$SESSION_TMUX_PANE claude_state=$CLAUDE_STATE user_state=$USER_STATE color=$color"
+    render_pane_bg "$SESSION_TMUX_PANE" "$color"
+    ;;
+esac

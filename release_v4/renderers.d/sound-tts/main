@@ -1,0 +1,76 @@
+#!/bin/bash
+# Renderer: sound-tts
+# Text-to-speech via iTerm2 escape sequence. Only speaks on claude state change.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+rlog() { log "${RENDER_PID:--}" "    sound-tts: $1"; }
+# Same as rlog, but also streams to stderr - so `! notify update ...` run
+# manually shows it immediately, not just in the log file.
+rerr() { rlog "$1"; echo "notify: sound-tts: $1" >&2; }
+
+# Sets TTS_NAME (what would be spoken) and TTS_NAME_REASON (which branch
+# picked it, for logging). Priority order:
+#   1. "name" key in sound-tts settings (session override, then global)
+#   2. Claude session's custom title, via resolve_claude_session_name.py
+#   3. tmux pane title (ignored if it's still tmux's un-set default, which
+#      is just the machine hostname - not a meaningful name)
+#   4. working directory basename
+#   5. fallback default "claude"
+resolve_tts_name() {
+  local name
+
+  name=$(echo "$RENDERER_SETTINGS" | jq -r '."sound-tts".name // empty')
+  if [ -n "$name" ]; then
+    TTS_NAME="$name"
+    TTS_NAME_REASON="name set in sound-tts settings"
+    return
+  fi
+
+  if [ -n "$CLAUDE_UUID" ]; then
+    name=$(python3 "$SCRIPT_DIR/resolve_claude_session_name.py" "$CLAUDE_UUID" 2>/dev/null)
+    if [ -n "$name" ]; then
+      TTS_NAME="$name"
+      TTS_NAME_REASON="Claude session custom title"
+      return
+    fi
+  fi
+
+  if [ -n "$SESSION_TMUX_PANE" ]; then
+    name=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#{pane_title}' 2>/dev/null)
+    if [ -n "$name" ] && [ "$name" != "$(hostname)" ]; then
+      TTS_NAME="$name"
+      TTS_NAME_REASON="tmux pane title"
+      return
+    fi
+  fi
+
+  if [ -n "$CLAUDE_WD" ] && [ "$CLAUDE_WD" != "$HOME" ] && [ "$CLAUDE_WD" != "/" ]; then
+    TTS_NAME=$(basename "$CLAUDE_WD")
+    TTS_NAME_REASON="working directory name"
+    return
+  fi
+
+  TTS_NAME="claude"
+  TTS_NAME_REASON="fallback default"
+}
+
+case "$TRIGGER" in
+  CLAUDE_STATE_UPDATE)
+    [ -z "$CLAUDE_STATE" ] && { rerr "skip (no claude state)"; exit 0; }
+    [ -n "$CLIENT_TTY" ] && [ -e "$CLIENT_TTY" ] || { rerr "skip (no client tty) - cannot speak"; exit 0; }
+
+    volume=$(echo "$RENDERER_SETTINGS" | jq -r ".\"sound-tts\".\"$CLAUDE_STATE\" // 0")
+    awk -v v="$volume" 'BEGIN { exit !(v > 0) }' || { rerr "skip (volume 0 for state $CLAUDE_STATE)"; exit 0; }
+
+    resolve_tts_name
+    rerr "speak tts_name=$TTS_NAME volume=$volume reason=$TTS_NAME_REASON tty=$CLIENT_TTY"
+    printf '\033Ptmux;\033\033]1337;Custom=id=tts:[[volm %s]] %s\a\033\\' "$volume" "$TTS_NAME" > "$CLIENT_TTY" 2>/dev/null
+    ;;
+  USER_STATE_UPDATE|REFRESH) rlog "skip trigger=$TRIGGER" ;;
+  STATUS)
+    resolve_tts_name
+    printf "TTS_NAME: '%s'\n" "$TTS_NAME"
+    printf "TTS_NAME_REASON: '%s'\n" "$TTS_NAME_REASON"
+    ;;
+esac

@@ -1,0 +1,21 @@
+#!/bin/bash
+# Renderer: sound-bell
+# Terminal bell. Only rings on claude state change.
+
+rlog() { log "${RENDER_PID:--}" "    sound-bell: $1"; }
+# Same as rlog, but also streams to stderr - so `! notify update ...` run
+# manually shows it immediately, not just in the log file.
+rerr() { rlog "$1"; echo "notify: sound-bell: $1" >&2; }
+
+case "$TRIGGER" in
+  CLAUDE_STATE_UPDATE)
+    [ -z "$CLAUDE_STATE" ] && { rerr "skip (no claude state)"; exit 0; }
+    [ -n "$CLIENT_TTY" ] && [ -e "$CLIENT_TTY" ] || { rerr "skip (no client tty)"; exit 0; }
+    count=$(echo "$RENDERER_SETTINGS" | jq -r ".\"sound-bell\".\"$CLAUDE_STATE\" // empty")
+    [ -z "$count" ] && { rerr "skip (no count for $CLAUDE_STATE)"; exit 0; }
+    [[ "$count" =~ ^[0-9]+$ ]] || { rerr "skip (invalid count '$count')"; exit 0; }
+    rerr "ring count=$count tty=$CLIENT_TTY"
+    i=0; while [ "$i" -lt "$count" ]; do printf '\a' > "$CLIENT_TTY" 2>/dev/null; i=$((i + 1)); [ "$i" -lt "$count" ] && sleep 0.3; done
+    ;;
+  USER_STATE_UPDATE|REFRESH) rlog "skip trigger=$TRIGGER" ;;
+esac

@@ -1,0 +1,63 @@
+#!/bin/bash
+# Renderer: terminal-title
+# Aggregated emoji icons in terminal tab title via OSC 0.
+# This renderer reads state files from other panes to build the aggregated title.
+
+rlog() { log "${RENDER_PID:--}" "    terminal-title: $1"; }
+
+resolve_icon() {
+  local cs="$1" us="$2"
+  local icon
+  icon=$(echo "$RENDERER_SETTINGS" | jq -r ".\"terminal-title\".\"$cs.$us\" // empty")
+  [ -n "$icon" ] && { echo "$icon"; return; }
+  icon=$(echo "$RENDERER_SETTINGS" | jq -r ".\"terminal-title\".\"$cs\" // empty")
+  echo "$icon"
+}
+
+render_title() {
+  local tmux_session="$1" client_tty="$2"
+  [ -n "$client_tty" ] && [ -e "$client_tty" ] || { rlog "skip (no client_tty)"; return; }
+
+  local icons=""
+  while IFS= read -r line; do
+    # 1. resolve pane_root_pid
+    local pane_root_pid
+    pane_root_pid=$(echo "$line" | awk '{print $2}')
+    [ -z "$pane_root_pid" ] && continue
+
+    # 2. resolve status
+    local session_dir="$ROOT_DATA_DIR/$pane_root_pid"
+    local CLAUDE_STATE="" USER_STATE=""
+    [ -f "$session_dir/static.env" ] || continue
+    source "$session_dir/state.env" 2>/dev/null
+    [ -z "$CLAUDE_STATE" ] && { rlog "skip icon pid=$pane_root_pid (no claude state)"; continue; }
+
+    # 3. resolve icon
+    local icon
+    icon=$(resolve_icon "$CLAUDE_STATE" "$USER_STATE")
+
+    if [ -n "$icon" ]; then
+      rlog "icon pid=$pane_root_pid claude_state=$CLAUDE_STATE user_state=$USER_STATE icon=$icon"
+      icons="${icons}${icon}" # Appending icon to the list
+    else
+      rlog "skip icon pid=$pane_root_pid claude_state=$CLAUDE_STATE user_state=$USER_STATE"
+    fi
+  done < <(tmux list-panes -t "$tmux_session" -F '#{pane_id} #{pane_pid}' 2>/dev/null)
+
+  # Set terminal title
+  rlog "title session=$tmux_session icons='$icons'"
+  if [ -n "$icons" ]; then
+    printf '\033]0;%s %s\a' "$icons" "$tmux_session" > "$client_tty"
+  else
+    printf '\033]0;%s\a' "$tmux_session" > "$client_tty"
+  fi
+}
+
+case "$TRIGGER" in
+  CLAUDE_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
+    [ -n "$SESSION_TMUX_SESSION" ] || { rlog "skip (no tmux session)"; exit 0; }
+    [ -n "$CLIENT_TTY" ] && [ -e "$CLIENT_TTY" ] || { rlog "skip (no client tty)"; exit 0; }
+    rlog "trigger=$TRIGGER"
+    render_title "$SESSION_TMUX_SESSION" "$CLIENT_TTY"
+    ;;
+esac
