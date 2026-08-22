@@ -481,11 +481,24 @@ while [ -n "$walk_pid" ] && [ "$walk_pid" -gt 1 ]; do
   esac
   walk_pid=$(ps -o ppid= -p "$walk_pid" 2>/dev/null | tr -d ' ')
 done
-[ -z "$CURRENT_PID" ] && CURRENT_PID="$_fallback_pid"
+# Prefer the TMUX_PANE-based pane_pid lookup over the generic walk fallback:
+# it's exact (asks tmux which shell actually owns this specific pane),
+# whereas _fallback_pid is just "the first shell-named ancestor the walk
+# happened to pass through" - which, under `tmux run-shell`, can be the
+# throwaway `sh -c` interpreter tmux forks to parse the command string.
+# Whether that fork happens is shell-implementation-dependent: observed with
+# Debian's dash (a real, separate `sh` process, matching the case below and
+# owning no session dir of its own), not on macOS (where that interpreter
+# tail-call-execs in place instead of forking, so no spurious shell-named
+# ancestor ever appears and this whole block is a no-op there). Without this
+# ordering, that throwaway pid would win at the line below and every tmux
+# menu action (Acknowledge/Pending/OnHold/...) would silently write state to
+# a one-off bogus directory instead of the real session's.
 if [ -z "$CURRENT_PID" ] && [ -n "$TMUX_PANE" ]; then
   _pane_pid=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_pid}' 2>/dev/null)
   [ -n "$_pane_pid" ] && [ -d "$ROOT_DATA_DIR/$_pane_pid" ] && CURRENT_PID="$_pane_pid"
 fi
+[ -z "$CURRENT_PID" ] && CURRENT_PID="$_fallback_pid"
 
 resolve_and_run() {
   local callback="$1"

@@ -34,3 +34,4 @@ Observed in session 44112769: 6 agents dispatched at 01:57:53, followed by 7 fal
 **Why deferred:** Requires changing the wire payload format emitted by `renderers.d/sound-tts/main`. Low priority - in practice, no duplicate speak events have ever been observed, so this is a theoretical protection, not an observed bug.
 
 **How to apply:** Add a nonce field to the payload in `renderers.d/sound-tts/main`, and implement a bounded recent-nonce set in `notify_tts_async_say` to skip already-seen events.
+ # Write unit test file
