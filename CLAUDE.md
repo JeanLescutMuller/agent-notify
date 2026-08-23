@@ -90,6 +90,17 @@ Two independent deployment surfaces - don't conflate them:
 
 **`MouseDown1Pane` rebind**: `after-select-pane` only fires when tmux's pane selection actually changes - clicking a pane that's already the active one (the common case: one pane per window) is a no-op for tmux, so the hook never fires and that pane's `USER_STATE` never updates to `Acknowledged`. `tmux-hooks.conf` therefore also rebinds `MouseDown1Pane` itself (preserving tmux's default `select-pane -t = \; send-keys -M`, appending a `run-shell` call to `notify user-focus` with `#{mouse_pane}`), so every click acknowledges its pane regardless of whether it was already active. Confirmed live: `after-select-pane` produced zero log output on a same-pane re-select even after the `PATH` fix above, while the `MouseDown1Pane` rebind fixed it.
 
+### Currently deployed (verified 2026-08-23)
+
+Deployed identically on both machines, no scheduler involved — the plugin's own hooks (session start/end etc.) are what invoke it, not cron/systemd/launchd:
+
+| Host | Deployed dir |
+|---|---|
+| MacBookProPerso (laptop) | `~/.claude-templates-dev/components/plugins/notify/` |
+| H-Frank-1 (VM) | `~/.claude-templates-dev/components/plugins/notify/` |
+
+Source (`~/dev/notify/release_v4/`) only exists on the Mac now — deploy to the VM by pulling this repo there and running `./install.sh` again.
+
 ## State Model
 
 `status` and `state` are deliberately different words for different things in this codebase:
