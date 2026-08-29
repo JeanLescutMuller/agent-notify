@@ -6,20 +6,22 @@
 #
 #   Variable              Description                  Example / Values                          Can be empty string?
 #   --------------------  ---------------------------  ------------------------------------------ ------
-#   TRIGGER               Event triggering this        USER_STATE_UPDATE|CLAUDE_STATE_UPDATE|REFRESH   no
+#   TRIGGER               Event triggering this        USER_STATE_UPDATE|AGENT_STATE_UPDATE|REFRESH|STATUS    no
 #   RENDER_PID            Shell PID of the session     1009003                                    no
-#   ROOT_DATA_DIR         Base runtime data dir        /tmp/claude-notify-jeanlescut              no
-#   SESSION_DATA_DIR      Session runtime data dir     /tmp/claude-notify-jeanlescut/1009003      no
+#   ROOT_DATA_DIR         Base runtime data dir        /tmp/agent-notify-jeanlescut               no
+#   SESSION_DATA_DIR      Session runtime data dir     /tmp/agent-notify-jeanlescut/1009003       no
 #   RENDERER_SETTINGS     Merged JSON settings          {"sound-tts":{"Finished":true}}            no  (defaults to '{}')
-#   CLAUDE_STATE          Claude state                 Working|Finished|WaitingForUser|Idle       ⚠️ yes (before first hook, or after wipe)
+#   AGENT_STATE           Agent state                  Working|Finished|WaitingForUser|Idle       ⚠️ yes (before first hook, or after wipe)
 #   USER_STATE            User state                   Pending|Seen|Acknowledged|OnHold           ⚠️ yes (before first hook, or after wipe)
 #   CLIENT_TTY            TTY of the tmux client       /dev/pts/112                               ⚠️ yes (no client attached)
 #   SESSION_TMUX_PANE     Tmux pane id                 %137                                       ⚠️ yes (outside tmux)
 #   SESSION_TMUX_SESSION  Tmux session name            notify                                     ⚠️ yes (outside tmux)
 #   SESSION_TMUX_WINDOW   Tmux window id               @10                                        ⚠️ yes (outside tmux)
-#   CLAUDE_UUID           Claude Code session UUID     44112769-0dc8-489b-b5dc-56e1f4eab079       ⚠️ yes (before first hook)
-#   CLAUDE_WD             Working directory            /home/user/project                         ⚠️ yes (before first hook)
-#   CLAUDE_PID            PID of claude process        458808                                     ⚠️ yes (before first hook)
+#   AGENT_TYPE            Adapter name                 claude|generic                             no
+#   AGENT_SESSION_ID      Native agent session id      44112769-0dc8-489b-b5dc-56e1f4eab079       ⚠️ yes
+#   AGENT_WD              Working directory            /home/user/project                         ⚠️ yes
+#   AGENT_PID             Agent process PID            458808                                     ⚠️ yes
+#   SESSION_NAME          Adapter-resolved title       Refactor notifications                     ⚠️ yes
 #
 # Read your renderer's settings from RENDERER_SETTINGS with:
 #   echo "$RENDERER_SETTINGS" | jq -r '."<renderer-name>".<key>'
@@ -34,9 +36,9 @@
 rlog() { log "${RENDER_PID:--}" "    <renderer-name>: $1"; }
 
 case "$TRIGGER" in
-  CLAUDE_STATE_UPDATE)
-    # Claude state changed, check $CLAUDE_STATE for the value
-    rlog "trigger=$TRIGGER claude_state=$CLAUDE_STATE"
+  AGENT_STATE_UPDATE)
+    # Agent state changed, check $AGENT_STATE for the value
+    rlog "trigger=$TRIGGER agent_state=$AGENT_STATE"
     ;;
   USER_STATE_UPDATE)
     # User state changed, check $USER_STATE for the value

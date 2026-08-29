@@ -1,6 +1,6 @@
 #!/bin/bash
 # Renderer: tmux-pane-bg
-# Tmux pane background color based on claude and user state.
+# Tmux pane background color based on agent and user state.
 
 rlog() { log "${RENDER_PID:--}" "    tmux-pane-bg: $1"; }
 
@@ -27,15 +27,15 @@ render_pane_bg() {
 }
 
 case "$TRIGGER" in
-  CLAUDE_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
+  AGENT_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
     [ -n "$SESSION_TMUX_PANE" ] || { rlog "skip (no pane)"; exit 0; }
-    if [ -z "$CLAUDE_STATE" ]; then
-      rlog "reset (no claude state) pane=$SESSION_TMUX_PANE"
+    if [ -z "$AGENT_STATE" ]; then
+      rlog "reset (no agent state) pane=$SESSION_TMUX_PANE"
       render_pane_bg "$SESSION_TMUX_PANE" "default"
       exit 0
     fi
-    color=$(resolve_color "$CLAUDE_STATE" "$USER_STATE")
-    rlog "trigger=$TRIGGER pane=$SESSION_TMUX_PANE claude_state=$CLAUDE_STATE user_state=$USER_STATE color=$color"
+    color=$(resolve_color "$AGENT_STATE" "$USER_STATE")
+    rlog "trigger=$TRIGGER pane=$SESSION_TMUX_PANE agent_state=$AGENT_STATE user_state=$USER_STATE color=$color"
     render_pane_bg "$SESSION_TMUX_PANE" "$color"
     ;;
 esac

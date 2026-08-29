@@ -1,37 +1,99 @@
-# Claude Notify - TODO
+# Notify TODO
 
-## False "Finished" notifications during subagent dispatch
+## rename this project
+It should be named "agent-notify" since it applies to agents.
 
-**Problem:** When Claude dispatches subagents (Agent tool), the main agent's turn ends and Claude Code fires the `Stop` hook. We transition to Finished, triggering TTS and bell. But 1 to 12 seconds later, a subagent returns, Claude resumes, and we go back to Working. This cycle repeats for each returning subagent, producing multiple false "Finished" notifications per turn.
+## Correctness
 
-Observed in session 44112769: 6 agents dispatched at 01:57:53, followed by 7 false Finished notifications over 8 minutes before the actual final Finished at 02:06:51.
+### Serialize overlapping state updates
 
-**Root cause:** Claude Code's `Stop` hook means "the main agent stopped generating text", not "all work is complete." The hook payload has no field indicating pending subagents.
+`update_state_and_render` performs an unlocked read/modify/write/render sequence. Concurrent hook
+commands can therefore read the same old state, overwrite each other's `state.env`, reuse the same
+`*.tmp` path, and interleave renderer calls. This was observed during the rapid T9 test in
+`TESTING.md`.
 
-**Investigation findings:**
-- Stop hook payload: no `pending_agents` or similar field
-- Subagent directory (`<transcript>/subagents/`) exists with `.meta.json` per agent, but no completion status
-- Subagent hooks fire with `/subagents/` in transcript_path (currently filtered out)
-- Transcript JSONL contains Agent tool_use and tool_result entries that could be counted (dispatched vs. returned)
-- Process tree shows child `claude` processes during subagent execution
+The Claude plugin currently makes this race especially easy to hit for `AskUserQuestion`: both the
+specific `WaitingForUser` `PreToolUse` hook and the matcher-less `Working` hook match that tool, and
+Claude runs matching hooks concurrently.
 
-**Proposed solutions (ranked by cleanliness):**
+Possible fix:
 
-1. **Transcript parsing on Stop** - Count Agent tool_use IDs vs. tool_result IDs in the JSONL transcript. If dispatched > returned, subagents are pending, skip Finished transition. Deterministic and correct, but expensive to parse on every Stop and complex in bash.
+- Route each native hook event through one adapter dispatcher so it emits only one normalized
+  state transition.
+- Protect the full per-session state transition and renderer pass with a portable lock. macOS does
+  not ship `flock`, so a carefully cleaned-up `mkdir` lock is the likely common implementation.
+- Replace fixed `file.tmp` names with unique, same-directory temporary files and atomic renames.
 
-2. **Grace period (Cooling state)** - On Stop, transition to "Cooling" instead of Finished. Visual renderers show green (user sees something finished). Sound renderers skip. A background `sleep 5` process checks: if still Cooling, promote to Finished and fire sounds. If activity resumed, do nothing. Practical, catches 90%+ of false positives (most subagent returns happen in 1 to 6 seconds). Tradeoff: 5 second delay on legitimate notifications.
+### Re-evaluate Claude's documented hook lifecycle
 
-3. **Subagent file age heuristic** - On Stop, check if any `subagents/*.jsonl` was modified within the last N seconds. If yes, subagents are likely still active. Simple but depends on file timestamps and a chosen threshold.
+The current Claude adapter reflects behavior verified during the August 2026 subagent
+investigation: hook stdin appeared empty, subagent completion did not trigger a usable parent hook,
+and completion was only reliably visible through the parent transcript's queue-operation entries.
+That is why `adapter_has_pending_work` scans a bounded transcript tail and the core maintains a
+`pending_finish` marker.
 
-4. **Process tree check** - Count `claude` child processes under CLAUDE_PID on Stop. If > 1, subagents may be running. Unreliable (hard to distinguish subagents from MCP servers).
+Current [Claude Code hook documentation](https://code.claude.com/docs/en/hooks) describes common
+JSON hook input on stdin (`session_id`, `cwd`, `transcript_path`) and native
+`SubagentStart`/`SubagentStop` events carrying `agent_id`.
+Validate those events against the actually deployed Claude CLI. If reliable, replace the
+undocumented environment lookup, transcript parsing, and 15-second pending-finish polling with
+adapter-owned lifecycle markers.
 
-**Decision:** TBD. Waiting for Claude Code to potentially expose a `pending_tools` or `running_agents` field in the hook payload, which would make this trivial.
+### Decide how new activity supersedes a pending finish
 
-## notify_tts_async_say: nonce-based dedup (deferred, low priority)
+If a suppressed `Finished` becomes resolvable immediately before a new `Working` event,
+`try_resolve_pending_finish` currently renders the old `Finished` first and then applies `Working`.
+Decide whether the completion notification is still desired or whether new activity should simply
+cancel the stale marker.
 
-**Idea:** Protect `notify_tts_async_say` against processing the same "say" event twice (e.g. if iTerm2/tmux ever redelivers a control sequence) by embedding a unique nonce in each event's payload and tracking recently-seen nonces on the listener side.
+## Accepted personal-project risk
 
-**Why deferred:** Requires changing the wire payload format emitted by `renderers.d/sound-tts/main`. Low priority - in practice, no duplicate speak events have ever been observed, so this is a theoretical protection, not an observed bug.
+### Runtime `.env` files are sourced as shell
 
-**How to apply:** Add a nonce field to the payload in `renderers.d/sound-tts/main`, and implement a bounded recent-nonce set in `notify_tts_async_say` to skip already-seen events.
- # Write unit test file
+`static.env` and `state.env` are written as unquoted shell assignments and later sourced. Values
+containing spaces can fail to load, and shell syntax in adapter metadata, session titles, working
+directories, tmux names, or manually supplied state values can execute code when the file is read.
+
+This should use JSON or safely escaped assignments before the project accepts untrusted adapters
+or is installed for other users. It is intentionally not being fixed while this remains a trusted,
+single-user personal project.
+
+## Claude-specific external issue
+
+### A subagent's backgrounded tool call can orphan the task
+
+In the old T10 scenario, a forked Claude subagent running a long background Bash command stopped
+updating its transcript and never produced a final completion notification. This appears to be
+Claude Code behavior rather than a notify state bug, but an orphan also means the transcript-based
+pending-work detector remains pending forever.
+
+## Renderer enhancements
+
+### Add status-aware TTS announcements
+
+Include the state in spoken text, for example “Backend needs you” versus “Backend is done.”
+
+### Speak directly on macOS when possible
+
+When notify itself runs locally on macOS and `say` is available, compare direct speech with the
+current iTerm2 control-sequence relay. Keep the relay for remote sessions.
+
+### Add nonce-based TTS deduplication
+
+Include a bounded event nonce in the sender/listener protocol if duplicate delivery is ever
+observed. Current listener-side queue deduplication has been sufficient in practice.
+
+### Add per-session voice/rate controls
+
+The listener already selects a deterministic voice from the session name. Consider exposing the
+voice pool and rate in persistent renderer settings.
+
+## Resolved history
+
+- **False Finished during dispatched subagents (2026-08-27):** Claude's `Stop` means the parent
+  stopped generating, not necessarily that dispatched work completed. The Claude adapter now
+  detects dispatched-but-not-completed agent IDs in the parent transcript, suppresses the early
+  transition, and resolves one pending finish when the work clears. See `TESTING.md` for the live
+  regression scenarios and the limitations above.
+- **Global settings lost on reinstall (2026-08-27):** mutable overrides now live under
+  `~/opt/notify/config`, separate from the replaceable `~/opt/notify/app` deployment.

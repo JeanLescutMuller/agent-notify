@@ -1,8 +1,6 @@
 #!/bin/bash
 # Renderer: sound-tts
-# Text-to-speech via iTerm2 escape sequence. Only speaks on claude state change.
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Text-to-speech via iTerm2 escape sequence. Only speaks on agent state change.
 
 rlog() { log "${RENDER_PID:--}" "    sound-tts: $1"; }
 # Same as rlog, but also streams to stderr - so `! notify update ...` run
@@ -12,7 +10,7 @@ rerr() { rlog "$1"; echo "notify: sound-tts: $1" >&2; }
 # Sets TTS_NAME (what would be spoken) and TTS_NAME_REASON (which branch
 # picked it, for logging). Priority order:
 #   1. "name" key in sound-tts settings (session override, then global)
-#   2. Claude session's custom title, via resolve_claude_session_name.py
+#   2. adapter-provided session name
 #   3. tmux pane title (ignored if it's still tmux's un-set default, which
 #      is just the machine hostname - not a meaningful name)
 #   4. working directory basename
@@ -27,13 +25,10 @@ resolve_tts_name() {
     return
   fi
 
-  if [ -n "$CLAUDE_UUID" ]; then
-    name=$(python3 "$SCRIPT_DIR/resolve_claude_session_name.py" "$CLAUDE_UUID" 2>/dev/null)
-    if [ -n "$name" ]; then
-      TTS_NAME="$name"
-      TTS_NAME_REASON="Claude session custom title"
-      return
-    fi
+  if [ -n "$SESSION_NAME" ]; then
+    TTS_NAME="$SESSION_NAME"
+    TTS_NAME_REASON="agent adapter session name"
+    return
   fi
 
   if [ -n "$SESSION_TMUX_PANE" ]; then
@@ -45,23 +40,23 @@ resolve_tts_name() {
     fi
   fi
 
-  if [ -n "$CLAUDE_WD" ] && [ "$CLAUDE_WD" != "$HOME" ] && [ "$CLAUDE_WD" != "/" ]; then
-    TTS_NAME=$(basename "$CLAUDE_WD")
+  if [ -n "$AGENT_WD" ] && [ "$AGENT_WD" != "$HOME" ] && [ "$AGENT_WD" != "/" ]; then
+    TTS_NAME=$(basename "$AGENT_WD")
     TTS_NAME_REASON="working directory name"
     return
   fi
 
-  TTS_NAME="claude"
+  TTS_NAME="agent"
   TTS_NAME_REASON="fallback default"
 }
 
 case "$TRIGGER" in
-  CLAUDE_STATE_UPDATE)
-    [ -z "$CLAUDE_STATE" ] && { rerr "skip (no claude state)"; exit 0; }
+  AGENT_STATE_UPDATE)
+    [ -z "$AGENT_STATE" ] && { rerr "skip (no agent state)"; exit 0; }
     [ -n "$CLIENT_TTY" ] && [ -e "$CLIENT_TTY" ] || { rerr "skip (no client tty) - cannot speak"; exit 0; }
 
-    volume=$(echo "$RENDERER_SETTINGS" | jq -r ".\"sound-tts\".\"$CLAUDE_STATE\" // 0")
-    awk -v v="$volume" 'BEGIN { exit !(v > 0) }' || { rerr "skip (volume 0 for state $CLAUDE_STATE)"; exit 0; }
+    volume=$(echo "$RENDERER_SETTINGS" | jq -r ".\"sound-tts\".\"$AGENT_STATE\" // 0")
+    awk -v v="$volume" 'BEGIN { exit !(v > 0) }' || { rerr "skip (volume 0 for state $AGENT_STATE)"; exit 0; }
 
     resolve_tts_name
     rerr "speak tts_name=$TTS_NAME volume=$volume reason=$TTS_NAME_REASON tty=$CLIENT_TTY"

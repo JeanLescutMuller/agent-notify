@@ -1,0 +1,21 @@
+#!/bin/bash
+# Codex adapter. Hook commands select it with NOTIFY_AGENT_TYPE=codex.
+
+adapter_load_context() {
+  AGENT_TYPE="codex"
+  AGENT_WD="${NOTIFY_AGENT_WD:-${AGENT_WD:-$PWD}}"
+}
+
+adapter_resolve_agent_pid() {
+  local shell_pid="$1"
+  ps -ax -o ppid= -o pid= -o comm= 2>/dev/null | awk -v parent="$shell_pid" '
+    $1 == parent {
+      command_name=$3
+      sub(/^.*\//, "", command_name)
+      if (command_name == "codex") { print $2; exit }
+    }
+  '
+}
+
+adapter_resolve_session_name() { return 0; }
+adapter_has_pending_work() { return 1; }

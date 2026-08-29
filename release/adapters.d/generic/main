@@ -1,0 +1,14 @@
+#!/bin/bash
+# Generic adapter. Integrations provide NOTIFY_* environment variables.
+
+adapter_load_context() {
+  AGENT_TYPE="${NOTIFY_AGENT_TYPE:-generic}"
+  AGENT_SESSION_ID="${NOTIFY_AGENT_SESSION_ID:-${AGENT_SESSION_ID:-}}"
+  AGENT_WD="${NOTIFY_AGENT_WD:-${AGENT_WD:-$PWD}}"
+  AGENT_PID="${NOTIFY_AGENT_PID:-${AGENT_PID:-}}"
+  ADAPTER_TRANSCRIPT_PATH="${NOTIFY_TRANSCRIPT_PATH:-}"
+}
+
+adapter_resolve_agent_pid() { printf '%s' "${AGENT_PID:-}"; }
+adapter_resolve_session_name() { printf '%s' "${NOTIFY_SESSION_NAME:-}"; }
+adapter_has_pending_work() { return 1; }

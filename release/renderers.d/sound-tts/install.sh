@@ -7,6 +7,11 @@
 # per-machine steps. See INSTALL.md in this directory.
 set -euo pipefail
 
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "       skipped (sound-tts listener requires macOS/iTerm2)"
+  exit 0
+fi
+
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTOLAUNCH_DIR="$HOME/Library/Application Support/iTerm2/Scripts/AutoLaunch"
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """iTerm2 AutoLaunch script.
 
-Listens for `Custom=id=tts:<payload>` control sequences (sent by the notify
-plugin's renderers.d/sound-tts, unmodified) across every session in this
+Listens for `Custom=id=tts:<payload>` control sequences (sent by notify's
+renderers.d/sound-tts, unmodified) across every session in this
 iTerm2 instance, and speaks each payload via macOS `say`, one at a time, in
 FIFO arrival order. Not-yet-spoken duplicates for the same payload are
 collapsed so a burst of repeats doesn't say the same thing twice.

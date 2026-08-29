@@ -27,20 +27,21 @@ render_title() {
 
     # 2. resolve status
     local session_dir="$ROOT_DATA_DIR/$pane_root_pid"
-    local CLAUDE_STATE="" USER_STATE=""
+    local AGENT_STATE="" CLAUDE_STATE="" USER_STATE=""
     [ -f "$session_dir/static.env" ] || continue
     source "$session_dir/state.env" 2>/dev/null
-    [ -z "$CLAUDE_STATE" ] && { rlog "skip icon pid=$pane_root_pid (no claude state)"; continue; }
+    AGENT_STATE="${AGENT_STATE:-${CLAUDE_STATE:-}}" # read legacy v4 state files
+    [ -z "$AGENT_STATE" ] && { rlog "skip icon pid=$pane_root_pid (no agent state)"; continue; }
 
     # 3. resolve icon
     local icon
-    icon=$(resolve_icon "$CLAUDE_STATE" "$USER_STATE")
+    icon=$(resolve_icon "$AGENT_STATE" "$USER_STATE")
 
     if [ -n "$icon" ]; then
-      rlog "icon pid=$pane_root_pid claude_state=$CLAUDE_STATE user_state=$USER_STATE icon=$icon"
+      rlog "icon pid=$pane_root_pid agent_state=$AGENT_STATE user_state=$USER_STATE icon=$icon"
       icons="${icons}${icon}" # Appending icon to the list
     else
-      rlog "skip icon pid=$pane_root_pid claude_state=$CLAUDE_STATE user_state=$USER_STATE"
+      rlog "skip icon pid=$pane_root_pid agent_state=$AGENT_STATE user_state=$USER_STATE"
     fi
   done < <(tmux list-panes -t "$tmux_session" -F '#{pane_id} #{pane_pid}' 2>/dev/null)
 
@@ -54,7 +55,7 @@ render_title() {
 }
 
 case "$TRIGGER" in
-  CLAUDE_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
+  AGENT_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
     [ -n "$SESSION_TMUX_SESSION" ] || { rlog "skip (no tmux session)"; exit 0; }
     [ -n "$CLIENT_TTY" ] && [ -e "$CLIENT_TTY" ] || { rlog "skip (no client tty)"; exit 0; }
     rlog "trigger=$TRIGGER"

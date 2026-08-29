@@ -1,0 +1,94 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" init",
+            "async": false,
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" session-start",
+            "async": false,
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" event Working",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" event Working",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" event WaitingForUser",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" event Finished",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" event Idle",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" session-end",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

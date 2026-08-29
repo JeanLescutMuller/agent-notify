@@ -1,0 +1,18 @@
+{
+  "name": "notify",
+  "version": "5.0.0+codex.20260829160928",
+  "description": "Terminal notifications for Codex and other coding agents.",
+  "author": {
+    "name": "Jean Lescut-Muller"
+  },
+  "interface": {
+    "displayName": "Notify",
+    "shortDescription": "Pane, title, sound, and TTS session notifications",
+    "longDescription": "Tracks Codex session lifecycle state and renders it through tmux pane colors, terminal titles, bells, and optional text-to-speech.",
+    "developerName": "Jean Lescut-Muller",
+    "category": "Productivity",
+    "capabilities": [
+      "Hooks"
+    ]
+  }
+}

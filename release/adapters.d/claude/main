@@ -1,0 +1,55 @@
+#!/bin/bash
+# Claude Code adapter. This file is sourced by notify, not executed.
+
+adapter_load_context() {
+  AGENT_TYPE="claude"
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && AGENT_SESSION_ID="$CLAUDE_CODE_SESSION_ID"
+  [ -n "${CLAUDE_PROJECT_DIR:-}" ] && AGENT_WD="$CLAUDE_PROJECT_DIR"
+
+  ADAPTER_TRANSCRIPT_PATH=""
+  if [ -n "${AGENT_SESSION_ID:-}" ]; then
+    local project_dir="${CLAUDE_PROJECT_DIR:-$PWD}"
+    local guess="$HOME/.claude/projects/-$(printf '%s' "${project_dir#/}" | tr '/' '-')/$AGENT_SESSION_ID.jsonl"
+    if [ -f "$guess" ]; then
+      ADAPTER_TRANSCRIPT_PATH="$guess"
+    else
+      ADAPTER_TRANSCRIPT_PATH="$(find "$HOME/.claude/projects" -type f -name "$AGENT_SESSION_ID.jsonl" -print 2>/dev/null | head -1)"
+    fi
+  fi
+}
+
+adapter_resolve_agent_pid() {
+  local shell_pid="$1"
+  ps -ax -o ppid= -o pid= -o comm= 2>/dev/null | awk -v parent="$shell_pid" '
+    $1 == parent {
+      command_name=$3
+      sub(/^.*\//, "", command_name)
+      if (command_name == "claude") { print $2; exit }
+    }
+  '
+}
+
+adapter_resolve_session_name() {
+  local session_id="$1"
+  [ -n "$session_id" ] || return 0
+  python3 "$NOTIFY_DIR/adapters.d/claude/resolve_session_name.py" "$session_id" 2>/dev/null
+}
+
+# Claude's Stop event means the parent stopped producing text, not necessarily
+# that its dispatched subagents completed. The parent transcript records both
+# dispatch and completion, so use its bounded tail as the authoritative signal.
+adapter_has_pending_work() {
+  local transcript="$1"
+  [ -n "$transcript" ] && [ -f "$transcript" ] || return 1
+
+  local recent dispatched completed id
+  recent="$(tail -c 1000000 "$transcript" 2>/dev/null)"
+  [ -n "$recent" ] || return 1
+  dispatched="$(printf '%s' "$recent" | grep -oE 'agentId: [0-9a-f]{12,}' | awk '{print $2}' | sort -u)"
+  [ -n "$dispatched" ] || return 1
+  completed="$(printf '%s' "$recent" | grep -F '"operation":"enqueue"' | grep -oE '<task-id>[0-9a-f]{12,}</task-id>' | sed -E 's#</?task-id>##g' | sort -u)"
+  for id in $dispatched; do
+    printf '%s\n' "$completed" | grep -qxF "$id" || return 0
+  done
+  return 1
+}

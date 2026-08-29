@@ -1,10 +1,10 @@
 #!/bin/bash
-# Claude Notify - unified CLI and handler.
+# Agent-agnostic Notify - unified CLI and handler.
 #
 # Called by:
-#   Claude Code hooks:   notify refresh  (SessionStart)
-#                        notify update CLAUDE_STATE <value>  (PreToolUse/Stop/Notification)
-#                        notify wipe  (SessionEnd)
+#   Agent integrations:  notify session-start
+#                        notify event <Working|Finished|WaitingForUser|Idle>
+#                        notify session-end
 #   tmux pane switch:    notify user-focus
 #   tmux menu / CLI:     notify status|update|wipe|refresh|<renderer> [--all|--global]
 #   init:                notify init  (symlink + tmux hooks, idempotent)
@@ -16,9 +16,17 @@
 # --- shared variables and functions ----------------------
 
 NOTIFY_USER="${USER:-$(whoami)}"
-ROOT_DATA_DIR="/tmp/claude-notify-$NOTIFY_USER"
+ROOT_DATA_DIR="${NOTIFY_ROOT_DATA_DIR:-/tmp/agent-notify-$NOTIFY_USER}"
 NOTIFY_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 RENDERERS_DIR="$NOTIFY_DIR/renderers.d"
+ADAPTERS_DIR="$NOTIFY_DIR/adapters.d"
+NOTIFY_RUNTIME_DIR="${NOTIFY_RUNTIME_DIR:-$HOME/opt/notify}"
+NOTIFY_CONFIG_DIR="${NOTIFY_CONFIG_DIR:-$NOTIFY_RUNTIME_DIR/config}"
+GLOBAL_RENDERERS_DIR="$NOTIFY_CONFIG_DIR/renderers.d"
+_legacy_root="/tmp/claude-notify-$NOTIFY_USER"
+if [ ! -e "$ROOT_DATA_DIR" ] && [ -d "$_legacy_root" ]; then
+  mv "$_legacy_root" "$ROOT_DATA_DIR"
+fi
 mkdir -p "$ROOT_DATA_DIR"
 
 ##### Logger
@@ -27,6 +35,34 @@ mkdir -p "$ROOT_DATA_DIR"
 # instead of reimplementing the timestamp/printf/redirect logic itself.
 log() { local pid="$1" msg="$2"; printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$pid" "$msg" >> "$ROOT_DATA_DIR/notify.log" 2>/dev/null; }
 export -f log
+
+##### Agent adapter context #####
+# Claude Code sets CLAUDE_CODE_SESSION_ID and CLAUDE_PROJECT_DIR as plain
+# environment variables on every hook command invocation (confirmed via
+# direct inspection - NOT documented, and NOT delivered via stdin the way a
+# hook's JSON payload usually is for other integrations, so don't assume
+# this generalizes to a different hook style). From these we can locate this
+# session's own transcript file - the ONLY reliable source for
+# the Claude adapter to detect outstanding dispatched subagents.
+# Fast path: Claude Code's own project-dir encoding is "/" -> "-" with a
+# leading "-" (confirmed for two real paths); verify the guess against the
+# filesystem and fall back to a bounded search by session id if it's ever
+# wrong (untested edge cases: dots, spaces, unusual characters in the path).
+AGENT_TYPE="${NOTIFY_AGENT_TYPE:-}"
+if [ -z "$AGENT_TYPE" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then AGENT_TYPE="claude"; fi
+AGENT_TYPE="${AGENT_TYPE:-generic}"
+load_adapter() {
+  local type="$1"
+  ADAPTER="$ADAPTERS_DIR/$type/main"
+  [ -f "$ADAPTER" ] || { echo "Unknown agent adapter: $type" >&2; exit 1; }
+  source "$ADAPTER"
+}
+load_adapter "$AGENT_TYPE"
+AGENT_SESSION_ID="${AGENT_SESSION_ID:-}"
+AGENT_WD="${AGENT_WD:-}"
+AGENT_PID="${AGENT_PID:-}"
+ADAPTER_TRANSCRIPT_PATH=""
+adapter_load_context
 
 ##### Managed block helpers (used by `init` for the tmux hooks block) #####
 # Same box + hash + remove-then-reconstruct convention used across every
@@ -39,7 +75,7 @@ _sha256() {
 }
 
 # Idempotently manages a box-delimited, hash-verified block in $1 (target
-# file) labeled $2 (e.g. "CLAUDE-NOTIFY"), containing $3 (desired content).
+# file) labeled $2 (e.g. "AGENT-NOTIFY"), containing $3 (desired content).
 # Removes and reconstructs the block every time it's called - never
 # touches anything outside it. If the block was hand-edited since it was
 # last written (hash mismatch), leaves the file untouched, prints a diff,
@@ -105,22 +141,96 @@ deploy_managed_block() {
   return 0
 }
 
+migrate_managed_block_label() {
+  local target="$1" old_label="$2" new_label="$3"
+  [ -f "$target" ] || return 0
+  grep -qF "# ┌─ ${old_label} BLOCK" "$target" || return 0
+  grep -qF "# ┌─ ${new_label} BLOCK" "$target" && return 0
+  sed "s/${old_label}/${new_label}/g" "$target" > "$target.tmp" && mv "$target.tmp" "$target"
+}
+
 ##### Command Helpers #####
 
 read_and_export_static() {
   local RENDER_PID="$1"
   SESSION_DATA_DIR="$ROOT_DATA_DIR/$RENDER_PID"
+  AGENT_TYPE=""
+  AGENT_SESSION_ID=""
+  AGENT_WD=""
+  AGENT_PID=""
+  SESSION_NAME=""
+  SESSION_TMUX_PANE=""
+  SESSION_TMUX_WINDOW=""
+  SESSION_TMUX_SESSION=""
+  TRANSCRIPT_PATH=""
   [ -f "$SESSION_DATA_DIR/static.env" ] && source "$SESSION_DATA_DIR/static.env"
-  export SESSION_DATA_DIR SHELL_PID CLAUDE_UUID CLAUDE_WD CLAUDE_PID SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION
+  # Read legacy v4 session files during the in-place migration.
+  AGENT_SESSION_ID="${AGENT_SESSION_ID:-${CLAUDE_UUID:-}}"
+  AGENT_WD="${AGENT_WD:-${CLAUDE_WD:-}}"
+  AGENT_PID="${AGENT_PID:-${CLAUDE_PID:-}}"
+  SESSION_NAME="${SESSION_NAME:-}"
+  AGENT_TYPE="${AGENT_TYPE:-claude}"
+  load_adapter "$AGENT_TYPE"
+  export SESSION_DATA_DIR SHELL_PID AGENT_TYPE AGENT_SESSION_ID AGENT_WD AGENT_PID SESSION_NAME SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION TRANSCRIPT_PATH
+}
+
+# Persists ADAPTER_TRANSCRIPT_PATH (this invocation's adapter context) into
+# RENDER_PID's static.env, if it's set and different from what's already
+# there. Cheap no-op otherwise, so safe to call on every hook-driven update -
+# this is the ONLY place TRANSCRIPT_PATH gets written outside of cmd_refresh's
+# full static rewrite, since most hook events (PreToolUse, Stop, Notification)
+# never go through cmd_refresh at all.
+persist_transcript_path() {
+  local RENDER_PID="$1" f="$ROOT_DATA_DIR/$RENDER_PID/static.env"
+  [ -n "$ADAPTER_TRANSCRIPT_PATH" ] && [ -f "$f" ] || return 0
+  grep -qxF "TRANSCRIPT_PATH=$ADAPTER_TRANSCRIPT_PATH" "$f" 2>/dev/null && return 0
+  { grep -v '^TRANSCRIPT_PATH=' "$f" 2>/dev/null; echo "TRANSCRIPT_PATH=$ADAPTER_TRANSCRIPT_PATH"; } > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# Detects subagents dispatched (via the Agent tool) by RENDER_PID's own
+# session that haven't completed yet, per that session's own transcript.
+# See TODO.md ("Subagent completion tracking") for the full investigation -
+# short version: a dispatched agent's tool_result always contains a literal
+# "agentId: <hex>" line; the moment that agent's underlying task actually
+# completes (whether or not the parent has looked at it yet), Claude Code
+# itself appends a {"type":"queue-operation","operation":"enqueue",...,
+# "content":"...<task-id><hex></task-id>...<status>completed</status>..."}
+# entry to the SAME transcript - authoritative, low-latency, and unlike a
+# subagent's own hooks (which never fire on completion - see TODO.md), this
+# is written reliably because the parent's own transcript is what's doing
+# the writing. Bounded to a tail window of the transcript for speed (the
+# Stop hook's own timeout is 2s in plugin.json) - a subagent dispatched
+# further back than that window would be missed; same class of tradeoff as
+# the Claude session-name resolver's backward chunk scan.
+# Returns 0 (true - still pending) or 1 (false - nothing outstanding).
+has_pending_work() { adapter_has_pending_work "$1"; }
+
+# If RENDER_PID owes a suppressed Finished (see cmd_update_state) and its
+# subagents have since cleared, applies it now and clears the marker. Called
+# both reactively (start of cmd_update_state, so the session's own next hook
+# event resolves it) and proactively (end of cmd_refresh, so it resolves even
+# if the session stays completely silent - see TODO.md, this is what makes
+# the fix work for the T6/T8/T10-style "parent goes idle" case).
+try_resolve_pending_finish() {
+  local RENDER_PID="$1" session_dir="$ROOT_DATA_DIR/$1"
+  [ -f "$session_dir/pending_finish" ] || return 0
+  read_and_export_static "$RENDER_PID"
+  if has_pending_work "$TRANSCRIPT_PATH"; then
+    return 0
+  fi
+  rm -f "$session_dir/pending_finish"
+  log "$RENDER_PID" "pending_finish resolved (subagents cleared) - applying Finished"
+  update_state_and_render "$RENDER_PID" "AGENT_STATE" "Finished" true
 }
 
 read_and_export_state() {
   local RENDER_PID="$1"
   SESSION_DATA_DIR="$ROOT_DATA_DIR/$RENDER_PID"
-  CLAUDE_STATE=""
+  AGENT_STATE=""
   USER_STATE=""
   [ -f "$SESSION_DATA_DIR/state.env" ] && source "$SESSION_DATA_DIR/state.env"
-  export CLAUDE_STATE USER_STATE
+  AGENT_STATE="${AGENT_STATE:-${CLAUDE_STATE:-}}"
+  export AGENT_STATE USER_STATE
 }
 
 resolve_client_tty() {
@@ -143,20 +253,21 @@ resolve_client_tty() {
   export CLIENT_TTY
 }
 
-# Assembles the combined { "<renderer>": {...}, ... } settings object:
-# for each renderer, its own renderers.d/<name>/settings.json merged with
-# that renderer's session override file, if one exists.
+# Assembles the combined { "<renderer>": {...}, ... } settings object from
+# immutable defaults, persistent global overrides, and session overrides.
 resolve_renderer_settings() {
   local RENDER_PID="$1"
   local session_renderers_dir="$ROOT_DATA_DIR/$RENDER_PID/renderers.d"
 
   RENDERER_SETTINGS='{}'
-  local dir renderer content ofile
+  local dir renderer content gfile ofile
   for dir in "$RENDERERS_DIR"/*/; do
     renderer="$(basename "$dir")"
     [ -x "$dir/main" ] || continue
     content='{}'
     [ -f "$dir/settings.json" ] && content=$(cat "$dir/settings.json")
+    gfile="$GLOBAL_RENDERERS_DIR/$renderer/settings.json"
+    [ -f "$gfile" ] && content=$(jq -s '.[0] * .[1]' <(printf '%s' "$content") "$gfile" 2>/dev/null)
     ofile="$session_renderers_dir/$renderer/settings.json"
     [ -f "$ofile" ] && content=$(jq -s '.[0] * .[1]' <(printf '%s' "$content") "$ofile" 2>/dev/null)
     RENDERER_SETTINGS=$(echo "$RENDERER_SETTINGS" | jq --arg r "$renderer" --argjson v "$content" '.[$r] = $v' 2>/dev/null)
@@ -167,7 +278,7 @@ resolve_renderer_settings() {
 call_all_renderers() {
   local RENDER_PID="$1"
   case "$2" in
-    CLAUDE_STATE) export TRIGGER="CLAUDE_STATE_UPDATE" ;;
+    AGENT_STATE) export TRIGGER="AGENT_STATE_UPDATE" ;;
     USER_STATE)   export TRIGGER="USER_STATE_UPDATE" ;;
     *)            export TRIGGER="$2" ;;
   esac
@@ -193,13 +304,13 @@ update_state_and_render() {
 
   # Read once. Load Disk vals, and new vals
   read_and_export_state "$RENDER_PID"
-  CLAUDE_STATE_DISK="$CLAUDE_STATE"
+  AGENT_STATE_DISK="$AGENT_STATE"
   USER_STATE_DISK="$USER_STATE"
   printf -v "$key" '%s' "$val" # Assign "$val" to the variable named in "$key" (safer than eval)
 
   # Guardrails
-  # Changing claude state: move user state back to pending, except if manually put on hold
-  if [ "$CLAUDE_STATE_DISK" != "$CLAUDE_STATE" ] && [ "$USER_STATE_DISK" != "OnHold" ]; then
+  # Changing agent state: move user state back to pending, except if manually put on hold
+  if [ "$AGENT_STATE_DISK" != "$AGENT_STATE" ] && [ "$USER_STATE_DISK" != "OnHold" ]; then
     USER_STATE="Pending"
   fi
   # Never downgrade a user state from acknowledged to seen
@@ -221,12 +332,12 @@ update_state_and_render() {
   fi
 
   # No-change check
-  if [ "$CLAUDE_STATE" = "$CLAUDE_STATE_DISK" ] && [ "$USER_STATE" = "$USER_STATE_DISK" ] ; then
+  if [ "$AGENT_STATE" = "$AGENT_STATE_DISK" ] && [ "$USER_STATE" = "$USER_STATE_DISK" ] ; then
     return 1
   fi
 
   # Write update to file
-  echo "CLAUDE_STATE=$CLAUDE_STATE" > "$session_dir/state.env"
+  echo "AGENT_STATE=$AGENT_STATE" > "$session_dir/state.env"
   echo "USER_STATE=$USER_STATE" >> "$session_dir/state.env"
 
   # Render
@@ -239,9 +350,14 @@ update_state_and_render() {
 cmd_refresh() {
   local RENDER_PID="$1"
   local session_dir="$ROOT_DATA_DIR/$RENDER_PID"
+  local invocation_agent_type="$AGENT_TYPE"
+  local invocation_session_id="$AGENT_SESSION_ID"
+  local invocation_agent_wd="$AGENT_WD"
+  local invocation_agent_pid="$AGENT_PID"
   log "$RENDER_PID" "refresh"
 
   read_and_export_static "$RENDER_PID"
+  local disk_session_id="$AGENT_SESSION_ID"
 
   # 1. We are NOT refreshing the current PID ? --> Wipe if Dead Session
   if [ "$RENDER_PID" != "$CURRENT_PID" ]; then
@@ -251,25 +367,29 @@ cmd_refresh() {
       return
     fi
 
-  # 2. We are refreshing the current PID ? --> Refresh Claude/tmux-pane statics
+  # 2. We are refreshing the current PID ? --> Refresh agent/tmux-pane statics
   #
   # `refresh --all` calls cmd_refresh once per session dir, but from a SINGLE
   # process - so $PWD / $TMUX_PANE / $CLAUDE_CODE_SESSION_ID always describe
   # whichever session happened to trigger the loop, never the RENDER_PID
   # currently being iterated. Applying them to another session's PID would
-  # silently corrupt that session's CLAUDE_UUID/CLAUDE_WD/SESSION_TMUX_PANE
+  # silently corrupt that session's agent metadata or SESSION_TMUX_PANE
   # with the invoker's own - so 2.1/2.2 below must stay gated to CURRENT_PID.
   else
-    # 2.1 If we have Claude infos (run inside Claude) --> Detect UUID mismatch + Refresh Claude statics
-    if [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
-      if [ -n "$CLAUDE_UUID" ] && [ "$CLAUDE_UUID" != "$CLAUDE_CODE_SESSION_ID" ]; then
-        log "$RENDER_PID" "stale session (OLD CLAUDE_UUID=$CLAUDE_UUID), wiping"
+    # 2.1 If the adapter supplied a session id, detect reuse of the shell and
+    # refresh agent metadata without teaching the core any native hook format.
+    if [ ! -f "$session_dir/static.env" ] || [ -n "$invocation_session_id" ] || [ "$invocation_agent_type" != "generic" ]; then
+      if [ -n "$disk_session_id" ] && [ "$disk_session_id" != "$invocation_session_id" ]; then
+        log "$RENDER_PID" "stale session (old agent_session_id=$disk_session_id), wiping"
         rm -rf "$session_dir"
         read_and_export_static "$RENDER_PID" # Reset statics
       fi
-      CLAUDE_PID=$(ps --ppid "$RENDER_PID" -o pid= -o comm= 2>/dev/null | awk '$2=="claude"{print $1; exit}')
-      CLAUDE_UUID="$CLAUDE_CODE_SESSION_ID"
-      CLAUDE_WD="$PWD"
+      AGENT_TYPE="$invocation_agent_type"
+      load_adapter "$AGENT_TYPE"
+      AGENT_SESSION_ID="$invocation_session_id"
+      AGENT_PID="${invocation_agent_pid:-$(adapter_resolve_agent_pid "$RENDER_PID")}"
+      AGENT_WD="${invocation_agent_wd:-$PWD}"
+      SESSION_NAME="$(adapter_resolve_session_name "$AGENT_SESSION_ID")"
     fi
     # 2.2 If we have TMUX_PANE loaded by Tmux, refresh it
     if [ -n "$TMUX_PANE" ]; then
@@ -297,25 +417,36 @@ cmd_refresh() {
   fi
 
   # 4. Write on Disk
+  if [ "$RENDER_PID" = "$CURRENT_PID" ] && [ -n "$ADAPTER_TRANSCRIPT_PATH" ]; then
+    TRANSCRIPT_PATH="$ADAPTER_TRANSCRIPT_PATH"
+  fi
   mkdir -p "$session_dir"
   f="$session_dir/static.env"
   echo "TIMESTAMP=$(date '+%Y-%m-%dT%H:%M:%S')" > "$f"
   echo "SHELL_PID=$RENDER_PID" >> "$f"
-  echo "CLAUDE_UUID=$CLAUDE_UUID" >> "$f"
-  echo "CLAUDE_WD=$CLAUDE_WD" >> "$f"
-  echo "CLAUDE_PID=$CLAUDE_PID" >> "$f"
+  echo "AGENT_TYPE=$AGENT_TYPE" >> "$f"
+  echo "AGENT_SESSION_ID=$AGENT_SESSION_ID" >> "$f"
+  echo "AGENT_WD=$AGENT_WD" >> "$f"
+  echo "AGENT_PID=$AGENT_PID" >> "$f"
+  echo "SESSION_NAME=$SESSION_NAME" >> "$f"
   echo "SESSION_TMUX_PANE=$SESSION_TMUX_PANE" >> "$f"
   echo "SESSION_TMUX_WINDOW=$SESSION_TMUX_WINDOW" >> "$f"
   echo "SESSION_TMUX_SESSION=$SESSION_TMUX_SESSION" >> "$f"
+  echo "TRANSCRIPT_PATH=$TRANSCRIPT_PATH" >> "$f"
 
   # 5. Refresh Renderers
   read_and_export_state "$RENDER_PID"
   call_all_renderers "$RENDER_PID" "REFRESH"
+
+  # 6. Proactive half of subagent-completion tracking: catches a suppressed
+  # Finished even if this session's own hooks never fire again (see
+  # try_resolve_pending_finish and the debounce-interval tightening below).
+  try_resolve_pending_finish "$RENDER_PID"
 }
 
 cmd_status() {
   local RENDER_PID="$1"
-  [ -n "$CMD_ARG1" ] && { echo "Usage: notify status [--all]  (to change a value, use: notify update <CLAUDE_STATE|USER_STATE> <value>, or notify <renderer> ...)"; exit 1; }
+  [ -n "$CMD_ARG1" ] && { echo "Usage: notify status [--all]  (to change a value, use: notify event <state>, notify update <AGENT_STATE|USER_STATE> <value>, or notify <renderer> ...)"; exit 1; }
   [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
 
   read_and_export_static "$RENDER_PID"
@@ -324,11 +455,13 @@ cmd_status() {
 
   echo "== General =="
   printf "  RENDER_PID    %s\n" "$RENDER_PID"
-  printf "  CLAUDE_STATE  %s\n" "${CLAUDE_STATE:-(none)}"
+  printf "  AGENT_STATE   %s\n" "${AGENT_STATE:-(none)}"
   printf "  USER_STATE    %s\n" "${USER_STATE:-(none)}"
-  printf "  CLAUDE_UUID   %s\n" "${CLAUDE_UUID:-(none)}"
-  printf "  CLAUDE_WD     %s\n" "${CLAUDE_WD:-(none)}"
-  printf "  CLAUDE_PID    %s\n" "${CLAUDE_PID:-(none)}"
+  printf "  AGENT_TYPE    %s\n" "${AGENT_TYPE:-(none)}"
+  printf "  SESSION_ID    %s\n" "${AGENT_SESSION_ID:-(none)}"
+  printf "  AGENT_WD      %s\n" "${AGENT_WD:-(none)}"
+  printf "  AGENT_PID     %s\n" "${AGENT_PID:-(none)}"
+  printf "  SESSION_NAME  %s\n" "${SESSION_NAME:-(none)}"
   printf "  TMUX_SESSION  %s\n" "${SESSION_TMUX_SESSION:-(none)}"
   printf "  TMUX_PANE     %s\n" "${SESSION_TMUX_PANE:-(none)}"
   printf "  CLIENT_TTY    %s\n" "${CLIENT_TTY:-(none)}"
@@ -337,20 +470,25 @@ cmd_status() {
   resolve_renderer_settings "$RENDER_PID"
 
   local session_renderers_dir="$ROOT_DATA_DIR/$RENDER_PID/renderers.d"
-  local dir renderer ofile out enabled state_label
+  local dir renderer gfile ofile out enabled state_label
   for dir in "$RENDERERS_DIR"/*/; do
     renderer="$(basename "$dir")"
     [ -x "$dir/main" ] || continue
+    gfile="$GLOBAL_RENDERERS_DIR/$renderer/settings.json"
     ofile="$session_renderers_dir/$renderer/settings.json"
     enabled=$(echo "$RENDERER_SETTINGS" | jq -r --arg r "$renderer" 'if .[$r] | has("enabled") then .[$r].enabled else true end')
     state_label="enabled"; [ "$enabled" = "false" ] && state_label="disabled"
 
     echo
     echo "== $renderer: $state_label =="
-    echo "  -- Global --"
+    echo "  -- Default --"
     printf "  %s\n" "$([ -f "$dir/settings.json" ] && jq -c . "$dir/settings.json" 2>/dev/null || echo '{}')"
+    if [ -f "$gfile" ]; then
+      echo "  -- Global override --"
+      printf "  %s\n" "$(jq -c . "$gfile" 2>/dev/null)"
+    fi
     if [ -f "$ofile" ]; then
-      echo "  -- Override --"
+      echo "  -- Session override --"
       printf "  %s\n" "$(jq -c . "$ofile" 2>/dev/null)"
     fi
     # Opt-in: a renderer may implement a STATUS case to print computed info
@@ -366,17 +504,46 @@ cmd_status() {
 
 cmd_update_state() {
   local RENDER_PID="$1"
+  [ "$CMD_ARG1" = "CLAUDE_STATE" ] && CMD_ARG1="AGENT_STATE" # v4 compatibility
   case "$CMD_ARG1" in
-    CLAUDE_STATE|USER_STATE) ;;
-    *) echo "Usage: notify update <CLAUDE_STATE|USER_STATE> <value> [--all]"; exit 1 ;;
+    AGENT_STATE|USER_STATE) ;;
+    *) echo "Usage: notify update <AGENT_STATE|USER_STATE> <value> [--all]"; exit 1 ;;
   esac
   [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
-  [ -z "$CMD_ARG2" ] && { echo "Usage: notify update <CLAUDE_STATE|USER_STATE> <value> [--all]"; exit 1; }
+  [ -z "$CMD_ARG2" ] && { echo "Usage: notify update <AGENT_STATE|USER_STATE> <value> [--all]"; exit 1; }
+  persist_transcript_path "$RENDER_PID"
+  # Reactive half of subagent-completion tracking (see try_resolve_pending_finish):
+  # any hook firing again for this session is a chance to apply a Finished
+  # that was suppressed earlier, before processing whatever this call itself
+  # is asking for.
+  try_resolve_pending_finish "$RENDER_PID"
+
+  # Don't let Stop's "the main turn ended" get reported as Finished while this
+  # session has dispatched subagents (fork or otherwise) that haven't
+  # completed yet, per its own transcript - see TODO.md ("Subagent completion
+  # tracking") for the full writeup. Suppress the transition and remember to
+  # retry via try_resolve_pending_finish instead of reporting done-when-not.
+  if [ "$CMD_ARG1" = "AGENT_STATE" ] && [ "$CMD_ARG2" = "Finished" ]; then
+    read_and_export_static "$RENDER_PID"
+    if has_pending_work "$TRANSCRIPT_PATH"; then
+      touch "$ROOT_DATA_DIR/$RENDER_PID/pending_finish"
+      log "$RENDER_PID" "update AGENT_STATE Finished suppressed (agent still has pending work)"
+      return
+    fi
+  fi
+
   log "$RENDER_PID" "update $CMD_ARG1 $CMD_ARG2"
   # force=true: this command is a direct, deliberate request (CLI or tmux
   # menu), not an automatic side effect - see the OnHold guardrail comment
   # in update_state_and_render.
-  update_state_and_render "$RENDER_PID" "$CMD_ARG1" "$CMD_ARG2" true
+  update_state_and_render "$RENDER_PID" "$CMD_ARG1" "$CMD_ARG2" true || {
+    local result=$?
+    # No state change is a successful idempotent request. In particular,
+    # selecting the already-active popup item must not make tmux report that
+    # its run-shell command failed.
+    [ "$result" -eq 1 ] && return 0
+    return "$result"
+  }
 }
 
 cmd_wipe() {
@@ -385,9 +552,9 @@ cmd_wipe() {
   log "$RENDER_PID" "wipe"
   read_and_export_static "$RENDER_PID"
   rm -rf "$ROOT_DATA_DIR/$RENDER_PID"
-  CLAUDE_STATE=""
+  AGENT_STATE=""
   USER_STATE=""
-  export CLAUDE_STATE USER_STATE
+  export AGENT_STATE USER_STATE
   call_all_renderers "$RENDER_PID" "REFRESH"
   log "$RENDER_PID" "cleaned up"
 }
@@ -396,23 +563,24 @@ cmd_wipe() {
 # CMD is the renderer name, CMD_ARG1 the action (on/off/enable/disable/key=val),
 # CMD_ARG2 + CMD_EXTRA_ARGS any further key=val pairs.
 #
-# --global writes DIRECTLY to that renderer's own renderers.d/<name>/settings.json.
+# --global writes to the persistent user configuration under NOTIFY_CONFIG_DIR.
 # Without --global, writes to that renderer's own settings.json under the
-# session's renderers.d/<name>/ dir - same layout as the source tree, one
+# session's renderers.d/<name>/ dir - same renderer-oriented layout, one
 # directory per renderer, so a renderer can drop other per-session files of
 # its own there later without needing a new convention. Both settings.json
-# files are unwrapped (just the renderer's own keys) and the same shape.
+# override files are unwrapped (just the renderer's own keys) and the same shape.
 cmd_settings() {
   local renderer="$CMD"
   if [ ! -x "$RENDERERS_DIR/$renderer/main" ]; then
     echo "Unknown command or renderer: $renderer"
-    echo "Usage: notify <init|user-focus|status|wipe|update|refresh|<renderer>> [args...] [--all|--global]"
+    echo "Usage: notify <init|session-start|event|session-end|user-focus|status|wipe|update|refresh|<renderer>> [args...] [--all|--global]"
     exit 1
   fi
 
   local target
   if [ "$1" = "_global" ]; then
-    target="$RENDERERS_DIR/$renderer/settings.json"
+    mkdir -p "$GLOBAL_RENDERERS_DIR/$renderer"
+    target="$GLOBAL_RENDERERS_DIR/$renderer/settings.json"
   else
     RENDER_PID="$1"
     [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
@@ -463,10 +631,14 @@ CMD_ARG1="${ARGS[1]:-}"
 CMD_ARG2="${ARGS[2]:-}"
 CMD_EXTRA_ARGS=("${ARGS[@]:3}")
 
-CURRENT_PID=""
+CURRENT_PID="${NOTIFY_RENDER_PID:-}"
+if [ -n "$CURRENT_PID" ] && ! [[ "$CURRENT_PID" =~ ^[0-9]+$ ]]; then
+  echo "NOTIFY_RENDER_PID must be numeric." >&2
+  exit 1
+fi
 _fallback_pid=""
 walk_pid=$PPID
-while [ -n "$walk_pid" ] && [ "$walk_pid" -gt 1 ]; do
+while [ -z "$CURRENT_PID" ] && [ -n "$walk_pid" ] && [ "$walk_pid" -gt 1 ]; do
   walk_cmd=$(ps -o comm= -p "$walk_pid" 2>/dev/null | tr -d ' ')
   walk_cmd="${walk_cmd##*/}" # non-login shells can report a full path, e.g. "/bin/zsh"
   walk_cmd="${walk_cmd#-}" # login shells report as "-zsh", "-bash", etc.
@@ -507,6 +679,9 @@ resolve_and_run() {
       [ -f "$d/static.env" ] && $callback "$(basename "$d")"
     done
   else
+    if [ "${NOTIFY_REQUIRE_SESSION:-false}" = "true" ] && [ ! -f "$ROOT_DATA_DIR/$CURRENT_PID/static.env" ]; then
+      CURRENT_PID=""
+    fi
     [ -z "$CURRENT_PID" ] && { echo "No active session found."; exit 1; }
     $callback "$CURRENT_PID"
   fi
@@ -532,18 +707,31 @@ case "$CMD" in
     ;;
   init)
     SYMLINK="$HOME/.local/bin/notify"
-    if [ "$(readlink -f "$SYMLINK" 2>/dev/null)" != "$(readlink -f "$0")" ]; then
+    SYMLINK_TARGET="$NOTIFY_RUNTIME_DIR/app/notify"
+    [ -f "$SYMLINK_TARGET" ] || SYMLINK_TARGET="$(readlink -f "$0")"
+    if [ "$(readlink -f "$SYMLINK" 2>/dev/null)" != "$(readlink -f "$SYMLINK_TARGET")" ]; then
       mkdir -p "$HOME/.local/bin"
-      ln -sf "$(readlink -f "$0")" "$SYMLINK"
+      ln -sf "$(readlink -f "$SYMLINK_TARGET")" "$SYMLINK"
     fi
     if command -v tmux >/dev/null 2>&1; then
       HOOKS_CONTENT="$(cat "$NOTIFY_DIR/tmux/tmux-hooks.conf")"
-      if deploy_managed_block "$HOME/.tmux.conf" "CLAUDE-NOTIFY" "$HOOKS_CONTENT"; then
+      migrate_managed_block_label "$HOME/.tmux.conf" "CLAUDE-NOTIFY" "AGENT-NOTIFY"
+      if deploy_managed_block "$HOME/.tmux.conf" "AGENT-NOTIFY" "$HOOKS_CONTENT"; then
         tmux source-file "$HOME/.tmux.conf" 2>/dev/null
       fi
     fi
     ;;
   status|s)  resolve_and_run cmd_status ;;
+  session-start)
+    resolve_and_run cmd_refresh
+    ;;
+  session-end) resolve_and_run cmd_wipe ;;
+  event)
+    [ -n "$CMD_ARG1" ] || { echo "Usage: notify event <Working|Finished|WaitingForUser|Idle> [--all]"; exit 1; }
+    CMD_ARG2="$CMD_ARG1"
+    CMD_ARG1="AGENT_STATE"
+    resolve_and_run cmd_update_state
+    ;;
   wipe)      resolve_and_run cmd_wipe ;;
   update)    resolve_and_run cmd_update_state ;;
   refresh)   resolve_and_run cmd_refresh ;;
@@ -559,7 +747,16 @@ _last_refresh_file="$ROOT_DATA_DIR/.last_refresh"
 _now_epoch=$(date '+%s')
 _last_refresh=0
 [ -f "$_last_refresh_file" ] && _last_refresh=$(cat "$_last_refresh_file" 2>/dev/null)
-if [ $((_now_epoch - _last_refresh)) -ge 300 ]; then
+# Any session with a suppressed Finished (pending_finish - see
+# try_resolve_pending_finish) shortens the debounce so it gets resolved
+# within seconds of its subagents actually clearing, instead of waiting up
+# to 5 minutes - cheap to check (just file existence) and only changes
+# anything while a subagent is genuinely still outstanding somewhere.
+_refresh_interval=300
+for _d in "$ROOT_DATA_DIR"/[0-9]*/; do
+  [ -f "$_d/pending_finish" ] && { _refresh_interval=15; break; }
+done
+if [ $((_now_epoch - _last_refresh)) -ge $_refresh_interval ]; then
   echo "$_now_epoch" > "$_last_refresh_file"
-  "$0" refresh --all &
+  bash "$0" refresh --all &
 fi

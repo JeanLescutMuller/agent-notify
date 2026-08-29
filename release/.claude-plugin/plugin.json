@@ -1,0 +1,35 @@
+{
+  "name": "notify",
+  "version": "5.0.0",
+  "description": "Claude Code integration for agent-neutral terminal notifications: pane colors, tab icons, bell, and TTS. Configure with: ! notify",
+  "author": {
+    "name": "Jean Lescut-Muller",
+    "email": "jeanlescut@meta.com"
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify init", "timeout": 3 }] },
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify session-start", "timeout": 3 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify event Working", "timeout": 2 }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion",
+        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify event WaitingForUser", "timeout": 2 }] },
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify event Working", "timeout": 2 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify event Finished", "timeout": 2 }] }
+    ],
+    "Notification": [
+      { "matcher": "idle_prompt",
+        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify event Idle", "timeout": 2 }] },
+      { "matcher": "permission_prompt|elicitation_dialog",
+        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify event WaitingForUser", "timeout": 2 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/notify session-end", "timeout": 2 }] }
+    ]
+  }
+}
