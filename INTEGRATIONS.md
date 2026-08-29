@@ -1,6 +1,6 @@
 # Agent integrations
 
-Notify exposes one normalized lifecycle regardless of the native agent:
+agent-notify exposes one normalized lifecycle regardless of the native agent:
 
 ```bash
 notify session-start

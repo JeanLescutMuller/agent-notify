@@ -1,4 +1,4 @@
 #!/bin/bash
 # Codex plugin entrypoint into the shared agent-neutral runtime.
 set -e
-exec "${NOTIFY_RUNTIME_DIR:-$HOME/opt/notify}/app/notify" "$@"
+exec "${NOTIFY_RUNTIME_DIR:-$HOME/opt/agent-notify}/app/notify" "$@"

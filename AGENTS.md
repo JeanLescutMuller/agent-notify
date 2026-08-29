@@ -1,8 +1,9 @@
-# Notify development guide
+# agent-notify development guide
 
-Notify is an agent-neutral terminal notification system. The core tracks normalized agent and user
-state; adapters translate native agent context, and renderers provide visual/audio output. Claude
-Code is the first bundled integration, not the core's identity.
+agent-notify is an agent-neutral terminal notification system. The core tracks normalized agent and
+user state; adapters translate native agent context, and renderers provide visual/audio output.
+Claude Code is the first bundled integration, not the core's identity. The project is named
+agent-notify; the CLI command it ships stays the shorter `notify`.
 
 ## Current version
 
@@ -12,7 +13,7 @@ Claude-only runtime directory and state keys remain readable solely for in-place
 ## Source tree
 
 ```text
-notify/
+agent-notify/
 ├── release/
 │   ├── .claude-plugin/plugin.json       # Claude integration manifest
 │   ├── notify                           # Agent-neutral CLI/runtime
@@ -45,8 +46,8 @@ Run `./install.sh` after any edit. It is idempotent and self-migrates the old Cl
 
 | Surface | Location |
 |---|---|
-| Replaceable application | `~/opt/notify/app/` |
-| Persistent global settings | `~/opt/notify/config/renderers.d/` |
+| Replaceable application | `~/opt/agent-notify/app/` |
+| Persistent global settings | `~/opt/agent-notify/config/renderers.d/` |
 | CLI symlink | `~/.local/bin/notify` |
 | Claude marketplace plugin symlink | `~/.claude-templates-dev/components/plugins/notify` |
 | macOS iTerm2 TTS listener | `~/Library/Application Support/iTerm2/Scripts/AutoLaunch/notify_tts_async_say.py` |
@@ -162,7 +163,7 @@ deployed CLI before replacing the working fallback. See `TODO.md` and `TESTING.m
 Settings merge from lowest to highest precedence:
 
 1. `release/renderers.d/<renderer>/settings.json` — immutable default.
-2. `~/opt/notify/config/renderers.d/<renderer>/settings.json` — persistent global override.
+2. `~/opt/agent-notify/config/renderers.d/<renderer>/settings.json` — persistent global override.
 3. `/tmp/agent-notify-$USER/<pid>/renderers.d/<renderer>/settings.json` — session override.
 
 The core checks `enabled` once before invoking a renderer. Renderers must not check it again. When

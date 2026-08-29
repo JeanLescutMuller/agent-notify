@@ -35,13 +35,13 @@ test_home=$(mktemp -d)
 HOME="$test_home" NOTIFY_INSTALL_CLAUDE=false NOTIFY_INSTALL_CODEX=false ./install.sh
 HOME="$test_home" NOTIFY_INSTALL_CLAUDE=false NOTIFY_INSTALL_CODEX=false ./install.sh
 test -L "$test_home/.local/bin/notify"
-test -x "$test_home/opt/notify/app/notify"
+test -x "$test_home/opt/agent-notify/app/notify"
 rm -rf "$test_home"
 ```
 
 The second install verifies idempotency. A complete migration test should additionally seed an old
 real plugin directory with a modified renderer settings file and confirm it appears under
-`~/opt/notify/config/renderers.d/` after installation.
+`~/opt/agent-notify/config/renderers.d/` after installation.
 
 ## Live adapter → framework checks
 
@@ -209,7 +209,7 @@ will intentionally leave `pending_finish` unresolved.
 
 - `notify status` should show Default, optional Global override, and optional Session override.
 - Change a session setting, reinstall, and confirm the session override remains in `/tmp`.
-- Change a global setting, reinstall twice, and confirm it remains under `~/opt/notify/config`.
+- Change a global setting, reinstall twice, and confirm it remains under `~/opt/agent-notify/config`.
 - On Debian, installation must print that the iTerm2 TTS listener was skipped and must not create
   `~/Library/Application Support/iTerm2/`.
 - On macOS/iTerm2, use the raw control sequence in

@@ -1,7 +1,4 @@
-# Notify TODO
-
-## rename this project
-It should be named "agent-notify" since it applies to agents.
+# agent-notify TODO
 
 ## Correctness
 
@@ -90,6 +87,9 @@ voice pool and rate in persistent renderer settings.
 
 ## Resolved history
 
+- **Project renamed to agent-notify (2026-08-29):** GitHub repo, `~/dev`, `~/opt`, and marketplace
+  symlinks now use `agent-notify`. The CLI command, plugin names, and env var prefix stay `notify`
+  for brevity.
 - **False Finished during dispatched subagents (2026-08-27):** Claude's `Stop` means the parent
   stopped generating, not necessarily that dispatched work completed. The Claude adapter now
   detects dispatched-but-not-completed agent IDs in the parent transcript, suppresses the early

@@ -5,7 +5,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$PROJECT_DIR/release"
-RUNTIME_ROOT="${NOTIFY_RUNTIME_DIR:-$HOME/opt/notify}"
+RUNTIME_ROOT="${NOTIFY_RUNTIME_DIR:-$HOME/opt/agent-notify}"
 DEST="$RUNTIME_ROOT/app"
 CONFIG_DIR="$RUNTIME_ROOT/config"
 BIN_LINK="$HOME/.local/bin/notify"
