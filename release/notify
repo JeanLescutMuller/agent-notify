@@ -17,6 +17,24 @@
 
 NOTIFY_VERSION="5.0"  # hardcoded; bump manually per notable change
 
+# Fallbacks fed to renderers, never written to state.env, whenever a session
+# hasn't had a real transition yet on that axis - a brand-new session dir, or
+# one that survived a same-session-id resume (see cmd_refresh's 2.1), sits
+# with AGENT_STATE/USER_STATE empty for the whole window between session
+# start and the first hook/menu action that actually sets them. Every
+# renderer treats empty AGENT_STATE as "nothing to render" and ignores
+# USER_STATE entirely (see tmux-pane-bg), so without a default even a manual
+# tmux-menu toggle would have no visible effect during that window. Applied
+# live, right before a render call, never persisted to state.env: this keeps
+# state.env/`notify status` reporting the true on-disk value (still empty
+# until a real transition happens), and - more importantly - keeps it out of
+# the no-change comparisons in update_state_and_render, which must keep
+# seeing the raw empty value or a genuine first `event Finished` on a
+# brand-new session would equal this default and be silently treated as a
+# no-op instead of a real transition.
+AGENT_STATE_DEFAULT="Finished"
+USER_STATE_DEFAULT="Pending"
+
 NOTIFY_USER="${USER:-$(whoami)}"
 ROOT_DATA_DIR="${NOTIFY_ROOT_DATA_DIR:-/tmp/agent-notify-$NOTIFY_USER}"
 NOTIFY_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -342,7 +360,14 @@ update_state_and_render() {
   echo "AGENT_STATE=$AGENT_STATE" > "$session_dir/state.env"
   echo "USER_STATE=$USER_STATE" >> "$session_dir/state.env"
 
-  # Render
+  # Render. Substitute AGENT_STATE_DEFAULT/USER_STATE_DEFAULT for whichever
+  # axis this update left empty (e.g. a USER_STATE-only change - tmux focus,
+  # menu action - on a session with no AGENT_STATE transition yet) - after
+  # the write above, so state.env keeps recording the true (possibly still
+  # empty) value. See the defaults' own comment for why this must stay after
+  # the no-change check too.
+  AGENT_STATE="${AGENT_STATE:-$AGENT_STATE_DEFAULT}" USER_STATE="${USER_STATE:-$USER_STATE_DEFAULT}"
+  export AGENT_STATE USER_STATE
   read_and_export_static "$RENDER_PID"
   call_all_renderers "$RENDER_PID" "$key"
 }
@@ -438,6 +463,8 @@ cmd_refresh() {
 
   # 5. Refresh Renderers
   read_and_export_state "$RENDER_PID"
+  AGENT_STATE="${AGENT_STATE:-$AGENT_STATE_DEFAULT}" USER_STATE="${USER_STATE:-$USER_STATE_DEFAULT}"
+  export AGENT_STATE USER_STATE
   call_all_renderers "$RENDER_PID" "REFRESH"
 
   # 6. Proactive half of subagent-completion tracking: catches a suppressed
@@ -617,6 +644,8 @@ cmd_settings() {
   if [ -n "$RENDER_PID" ]; then
     read_and_export_static "$RENDER_PID"
     read_and_export_state "$RENDER_PID"
+    AGENT_STATE="${AGENT_STATE:-$AGENT_STATE_DEFAULT}" USER_STATE="${USER_STATE:-$USER_STATE_DEFAULT}"
+    export AGENT_STATE USER_STATE
     call_all_renderers "$RENDER_PID" "REFRESH"
   fi
 }
