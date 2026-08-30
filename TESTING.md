@@ -8,25 +8,30 @@ Run the complete local suite from the repository root:
 bash -n install.sh release/notify release/codex/notify release/adapters.d/*/main release/renderers.d/*/main release/renderers.d/*/install.sh
 find release -name '*.json' -print0 | xargs -0 -n1 jq empty
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-./tests/test_framework.sh
+for t in tests/test_*.sh; do "$t"; done
 claude plugin validate release
 # Codex validates its manifest and hook schema while installing the local plugin.
 git diff --check
 ```
 
-`test_framework.sh` is isolated from real runtime state and tests:
+All `tests/test_*.sh` scripts are isolated from real runtime state (throwaway `$HOME`/root-data
+dirs, stub `tmux`/`claude`/`codex` binaries where needed) and are end-to-end scenarios, not a
+branch-by-branch unit-test decomposition — see `tests/AGENTS.md` for the full map and rationale.
 
-| Boundary | Coverage |
+| File | Scenarios |
 |---|---|
-| Adapter → framework | Generic, Codex, and Claude adapter selection; `Working`, `WaitingForUser`, `Finished`, and `Idle`; `USER_STATE` reset and `OnHold` guardrails; session cleanup |
-| Framework isolation | `refresh --all` cannot leak adapter or transcript metadata between sessions |
-| tmux popup | Direct pane-PID targeting, no state creation for plain shell panes, and idempotent selections |
-| Framework → renderers | Every adapter dispatches all four renderers on agent-state changes |
-| Renderer output | BEL byte, iTerm2 TTS sequence, aggregated terminal title, and both tmux pane-style options |
+| `test_framework.sh` | Adapter selection (generic/codex/claude) × full state lifecycle, `USER_STATE` reset/`OnHold`/`Acknowledged` guardrails, `CLAUDE_STATE` v4 alias, tmux popup PID targeting + idempotency, absolute-path use in every `tmux-hooks.conf` `run-shell` line, `refresh --all` session isolation, all four renderers' literal output, a session-disabled renderer being skipped by the core dispatcher |
+| `test_subagent_tracking.sh` | Fixture-transcript automation of the live T1/T2/T3/T5 scenarios below: single dispatched subagent, three parallel/staggered subagents, silent background completion resolved via `refresh` alone, and an orphaned subagent whose `pending_finish` marker never expires |
+| `test_tmux_focus.sh` | `user-focus` pane switching: focused pane → `Acknowledged`, other known panes → `Seen`, a plain shell pane untouched, `OnHold`/`Acknowledged` immune to the automatic path, empty `$TMUX_PANE` is a no-op |
+| `test_renderer_settings.sh` | The real three-file settings merge (default < global < session) reaching actual renderer dispatch, and a session-scoped `enabled=false` overriding a default-enabled renderer |
+| `test_notify_init.sh` | The managed tmux-hooks block lifecycle: `CLAUDE-NOTIFY`→`AGENT-NOTIFY` label migration, fresh deploy, idempotent redeploy, a real content change producing exactly one backup, and a hand-edited block being refused rather than clobbered |
+| `test_install.sh` | Fresh install / idempotent reinstall / preserved `config/` / clean `app/` replacement; old-plugin-dir settings migration (migrated once, never re-migrated or clobbered); Claude/Codex plugin registration against fake `claude`/`codex` binaries |
+| `test_manifests.sh` | Static `jq`/grep checks on both plugin manifests: absolute hook paths, sane timeouts, the documented `AskUserQuestion`/catch-all `PreToolUse` overlap, `NOTIFY_AGENT_TYPE=codex` always present, hook-event coverage matching this file's own mapping table |
+| `test_known_issues.sh` | Opt-in (`RUN_KNOWN_ISSUES=1`) tripwires for two currently-accepted `TODO.md`/CLAUDE.md risks: the unlocked concurrent state-update race (informational — reproducing a real race black-box is probabilistic, so it never fails the suite by itself) and the shell-metadata trust boundary (deterministic) |
 
-This suite calls the adapters directly with representative native context. It deliberately does
-not pretend to test whether Claude or Codex fired the native hook; use the live checks below for
-that boundary.
+These suites call the adapters directly (or through fixture transcripts standing in for a real
+Claude session) with representative native context. They deliberately do not pretend to test
+whether Claude or Codex fired the native hook; use the live checks below for that boundary.
 
 For an isolated installer smoke test that does not register Claude or touch the real home:
 
@@ -39,9 +44,10 @@ test -x "$test_home/opt/agent-notify/app/notify"
 rm -rf "$test_home"
 ```
 
-The second install verifies idempotency. A complete migration test should additionally seed an old
-real plugin directory with a modified renderer settings file and confirm it appears under
-`~/opt/agent-notify/config/renderers.d/` after installation.
+The second install verifies idempotency. The full migration scenario — seeding an old plugin
+directory with a modified renderer settings file and confirming it lands under
+`~/opt/agent-notify/config/renderers.d/` after installation, without ever being re-migrated or
+clobbered — is automated in `tests/test_install.sh`.
 
 ## Live adapter → framework checks
 
@@ -129,8 +135,12 @@ but testing both proves that each native hook reaches the same normalized path.
 
 ## Live Claude subagent regression
 
-These scenarios exercise Claude's real hook and transcript behavior, which is not reproduced by
-the unit tests. Use a disposable Claude session.
+These scenarios exercise Claude's real hook and transcript behavior. T1, T2, T3, and T5's
+`adapter_has_pending_work`/`pending_finish` logic are automated against fixture transcripts in
+`tests/test_subagent_tracking.sh` — what's not reproduced there is whether Claude's real hook
+lifecycle actually produces transcripts shaped like these scenarios in the first place, and T4's
+concurrent-hook nondeterminism, which needs a live session either way. Use a disposable Claude
+session for that live verification.
 
 ### Bound a log window
 

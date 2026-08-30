@@ -15,6 +15,8 @@
 
 # --- shared variables and functions ----------------------
 
+NOTIFY_VERSION="5.0"  # hardcoded; bump manually per notable change
+
 NOTIFY_USER="${USER:-$(whoami)}"
 ROOT_DATA_DIR="${NOTIFY_ROOT_DATA_DIR:-/tmp/agent-notify-$NOTIFY_USER}"
 NOTIFY_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -454,6 +456,7 @@ cmd_status() {
   resolve_client_tty
 
   echo "== General =="
+  printf "  VERSION       %s\n" "$NOTIFY_VERSION"
   printf "  RENDER_PID    %s\n" "$RENDER_PID"
   printf "  AGENT_STATE   %s\n" "${AGENT_STATE:-(none)}"
   printf "  USER_STATE    %s\n" "${USER_STATE:-(none)}"

@@ -20,6 +20,7 @@ INSTALL_CODEX="${NOTIFY_INSTALL_CODEX:-auto}"
 stage_dir=""
 cleanup() {
   [ -n "$stage_dir" ] && [ -d "$stage_dir" ] && rm -rf "$stage_dir"
+  return 0
 }
 trap cleanup EXIT
 

@@ -2,8 +2,7 @@
 # Integration tests for adapter -> framework -> renderer boundaries.
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NOTIFY="$PROJECT_DIR/release/notify"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/test_helpers.sh"
 TEST_ROOT="$(mktemp -d /tmp/notify-tests.XXXXXX)"
 export TEST_ROOT
 TEST_PIDS=""
@@ -14,18 +13,6 @@ cleanup() {
   rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
-
-pass_count=0
-pass() { printf 'PASS: %s\n' "$1"; pass_count=$((pass_count + 1)); }
-fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-assert_file_contains() {
-  local file="$1" expected="$2" label="$3"
-  grep -qxF "$expected" "$file" || fail "$label (missing '$expected' in $file)"
-}
-assert_log_contains() {
-  local file="$1" expected="$2" label="$3"
-  grep -qF "$expected" "$file" || fail "$label (missing '$expected' in $file)"
-}
 
 run_notify() {
   local root="$1" adapter="$2" render_pid="$3"
@@ -81,8 +68,21 @@ test_lifecycle() {
   assert_file_contains "$root/$render_pid/state.env" "AGENT_STATE=Finished" "$adapter Finished state"
   assert_file_contains "$root/$render_pid/state.env" "USER_STATE=Pending" "$adapter Finished user state"
 
-  run_notify "$root" "$adapter" "$render_pid" event Idle
-  assert_file_contains "$root/$render_pid/state.env" "AGENT_STATE=Idle" "$adapter Idle state"
+  # An automatic-style Seen request is rejected once USER_STATE is
+  # Acknowledged - even a deliberate `update` call (force=true), since the
+  # "never downgrade acknowledged to seen" guard has no force exception,
+  # unlike the OnHold guard right below it in update_state_and_render. This
+  # locks down that asymmetry as current behavior, not a claim it's correct.
+  run_notify "$root" "$adapter" "$render_pid" update USER_STATE Acknowledged
+  run_notify "$root" "$adapter" "$render_pid" update USER_STATE Seen
+  assert_file_contains "$root/$render_pid/state.env" "USER_STATE=Acknowledged" \
+    "$adapter Acknowledged not downgraded to Seen even via deliberate update"
+
+  # v4 compatibility: `update CLAUDE_STATE ...` is accepted as an alias for
+  # AGENT_STATE.
+  run_notify "$root" "$adapter" "$render_pid" update CLAUDE_STATE Idle
+  assert_file_contains "$root/$render_pid/state.env" "AGENT_STATE=Idle" \
+    "$adapter CLAUDE_STATE alias maps to AGENT_STATE"
 
   for renderer in sound-bell sound-tts terminal-title tmux-pane-bg; do
     assert_log_contains "$root/notify.log" "RENDER AGENT_STATE_UPDATE $renderer" \
@@ -99,6 +99,16 @@ test_popup_targeting() {
   local count
   count=$(grep -c 'NOTIFY_RENDER_PID=#{pane_pid} NOTIFY_REQUIRE_SESSION=true' "$hooks")
   [ "$count" -eq 3 ] || fail "all popup state actions target the pane PID"
+
+  # tmux run-shell spawns a non-interactive, non-login shell that never loads
+  # PATH from ~/.zshrc, so every single run-shell command in this file - not
+  # just the 3 popup-menu ones above - must use the absolute
+  # $HOME/.local/bin/notify path, never a bare `notify`.
+  local run_shell_lines total_absolute
+  run_shell_lines=$(grep -cE "run-shell [\"']" "$hooks")
+  total_absolute=$(grep -cE "run-shell [\"'].*\\\$HOME/\\.local/bin/notify" "$hooks")
+  [ "$run_shell_lines" -eq "$total_absolute" ] || \
+    fail "every run-shell invocation in tmux-hooks.conf uses the absolute notify path ($total_absolute/$run_shell_lines)"
 
   local root="$TEST_ROOT/missing-session"
   mkdir -p "$root"
@@ -123,12 +133,12 @@ test_refresh_all_isolation() {
   date '+%s' > "$root/.last_refresh"
   printf '%s\n' \
     "SHELL_PID=$first" "AGENT_TYPE=codex" "AGENT_SESSION_ID=codex-one" \
-    "AGENT_WD=/tmp/codex-one" "AGENT_PID=101" "SESSION_NAME=" \
+    "AGENT_WD=/tmp/codex-one" "AGENT_PID=101" "SESSION_NAME=codex-one-name" \
     "SESSION_TMUX_PANE=" "SESSION_TMUX_WINDOW=" "SESSION_TMUX_SESSION=" \
     "TRANSCRIPT_PATH=/tmp/codex-one.jsonl" > "$root/$first/static.env"
   printf '%s\n' \
     "SHELL_PID=$second" "AGENT_TYPE=claude" "AGENT_SESSION_ID=claude-two" \
-    "AGENT_WD=/tmp/claude-two" "AGENT_PID=202" "SESSION_NAME=" \
+    "AGENT_WD=/tmp/claude-two" "AGENT_PID=202" "SESSION_NAME=claude-two-name" \
     "SESSION_TMUX_PANE=" "SESSION_TMUX_WINDOW=" "SESSION_TMUX_SESSION=" \
     "TRANSCRIPT_PATH=/tmp/claude-two.jsonl" > "$root/$second/static.env"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Pending' > "$root/$first/state.env"
@@ -141,6 +151,14 @@ test_refresh_all_isolation() {
   assert_file_contains "$root/$first/static.env" "TRANSCRIPT_PATH=/tmp/codex-one.jsonl" "refresh-all preserves first transcript"
   assert_file_contains "$root/$second/static.env" "AGENT_TYPE=claude" "refresh-all preserves second adapter"
   assert_file_contains "$root/$second/static.env" "TRANSCRIPT_PATH=/tmp/claude-two.jsonl" "refresh-all preserves second transcript"
+  # Only CURRENT_PID's own agent metadata may be refreshed from the invoking
+  # process's own $PWD/env - a `refresh --all` sweep must not overwrite every
+  # OTHER session's AGENT_PID/SESSION_NAME with whatever the invoker's
+  # process happens to report either.
+  assert_file_contains "$root/$first/static.env" "AGENT_PID=101" "refresh-all preserves first AGENT_PID"
+  assert_file_contains "$root/$first/static.env" "SESSION_NAME=codex-one-name" "refresh-all preserves first SESSION_NAME"
+  assert_file_contains "$root/$second/static.env" "AGENT_PID=202" "refresh-all preserves second AGENT_PID"
+  assert_file_contains "$root/$second/static.env" "SESSION_NAME=claude-two-name" "refresh-all preserves second SESSION_NAME"
   pass "refresh --all keeps sessions isolated"
 }
 
@@ -184,11 +202,43 @@ test_renderers() {
   bash "$PROJECT_DIR/release/renderers.d/tmux-pane-bg/main" || fail "tmux-pane-bg executes"
   grep -qF 'window-style bg=#123456' "$calls" || fail "tmux-pane-bg sets inactive style"
   grep -qF 'window-active-style bg=#123456' "$calls" || fail "tmux-pane-bg sets active style"
+
+  # AGENT_STATE empty (e.g. right after a wipe) forces an immediate reset to
+  # "default" regardless of configured settings, via `tmux set-option -u`,
+  # not by setting a literal "bg=default".
+  : > "$calls"
+  AGENT_STATE="" USER_STATE="" bash "$PROJECT_DIR/release/renderers.d/tmux-pane-bg/main" || \
+    fail "tmux-pane-bg executes with no agent state"
+  grep -qF -- '-u window-style' "$calls" || fail "tmux-pane-bg unsets inactive style on empty AGENT_STATE"
+  grep -qF -- '-u window-active-style' "$calls" || fail "tmux-pane-bg unsets active style on empty AGENT_STATE"
   pass "all renderer outputs"
+}
+
+test_renderer_disabled_is_skipped() {
+  # A renderer disabled at any settings layer must never be invoked by the
+  # core dispatcher - exercised through `notify event`, not by calling the
+  # renderer's own main directly, since the skip decision belongs entirely
+  # to the core (`call_all_renderers`), not to the renderer itself.
+  local root="$TEST_ROOT/renderer-disable" render_pid=73002
+  mkdir -p "$root"
+  date '+%s' > "$root/.last_refresh"
+  local env=(HOME="$TEST_ROOT/home" NOTIFY_AGENT_TYPE=generic NOTIFY_AGENT_SESSION_ID=disable-test
+    NOTIFY_AGENT_WD="$PROJECT_DIR" NOTIFY_AGENT_PID=9002 NOTIFY_ROOT_DATA_DIR="$root"
+    NOTIFY_CONFIG_DIR="$TEST_ROOT/config-disable" NOTIFY_RENDER_PID="$render_pid")
+  env "${env[@]}" bash "$NOTIFY" session-start 2>/dev/null
+  env "${env[@]}" bash "$NOTIFY" sound-bell disable 2>/dev/null
+  env "${env[@]}" bash "$NOTIFY" event Finished 2>/dev/null
+
+  assert_log_contains "$root/notify.log" "RENDER AGENT_STATE_UPDATE sound-bell skip (disabled)" \
+    "a session-disabled renderer is skipped by the core dispatcher"
+  assert_log_not_contains "$root/notify.log" "sound-bell: ring" \
+    "a disabled renderer's own logic never runs"
+  pass "disabled renderer is skipped by the core dispatcher"
 }
 
 for adapter in generic codex claude; do test_lifecycle "$adapter"; done
 test_popup_targeting
 test_refresh_all_isolation
 test_renderers
+test_renderer_disabled_is_skipped
 printf '\nAll %s integration groups passed.\n' "$pass_count"
