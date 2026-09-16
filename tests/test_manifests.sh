@@ -58,12 +58,29 @@ test_codex_hooks_manifest() {
   [ -z "$bad_commands" ] || fail "every codex hook command must set NOTIFY_AGENT_TYPE=codex (found: $bad_commands)"
 
   local expected_keys actual_keys
-  expected_keys=$(printf '%s\n' Interrupt PermissionRequest PreToolUse SessionEnd SessionStart Stop UserPromptSubmit | sort)
+  expected_keys=$(printf '%s\n' Interrupt PermissionRequest PostToolUse PreToolUse SessionEnd SessionStart Stop UserPromptSubmit | sort)
   actual_keys=$(jq -r '.hooks | keys[]' "$CODEX_HOOKS" | sort)
   [ "$expected_keys" = "$actual_keys" ] || \
     fail "codex hooks.json event coverage changed - expected [$expected_keys], got [$actual_keys]"
 
-  pass "codex hooks.json: valid, always tags NOTIFY_AGENT_TYPE=codex, matches TESTING.md's event table"
+  local timeouts bad_timeouts
+  timeouts=$(jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .timeout' "$CODEX_HOOKS")
+  bad_timeouts=$(printf '%s\n' "$timeouts" | awk '$1 < 1 || $1 > 3' || true)
+  [ -z "$bad_timeouts" ] || fail "every codex hook timeout should stay within the documented 1-3s bound (found: $bad_timeouts)"
+
+  # TODO.md ("Distinguish auto-approved Codex permission requests from real
+  # waits", resolved 2026-09-03): PostToolUse must map to `event Working` -
+  # it's what clears a WaitingForUser the instant an auto-approved tool
+  # actually finishes, instead of leaving it rendered until some unrelated
+  # later PreToolUse (observed lingering minutes in production). A silent
+  # rewiring or removal here would reintroduce that regression with no
+  # other test able to catch it, since test_framework.sh's lifecycle
+  # scenario exercises the same `notify event` calls this hook fires but
+  # never touches hooks.json itself.
+  jq -e '.hooks.PostToolUse[0].hooks[0].command | test(" event Working$")' "$CODEX_HOOKS" >/dev/null || \
+    fail "codex hooks.json PostToolUse must map to 'event Working' (see TODO.md's resolved auto-review flap entry)"
+
+  pass "codex hooks.json: valid, always tags NOTIFY_AGENT_TYPE=codex, sane timeouts, matches TESTING.md's event table, PostToolUse resolves Working"
 }
 
 test_claude_plugin_manifest

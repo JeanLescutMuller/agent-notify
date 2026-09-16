@@ -165,8 +165,15 @@ Pure `jq`/grep assertions, no runtime: every Claude hook command starts with
 `PreToolUse` matcher plus the catch-all matcher-less one are both still present — the known
 T4/TODO overlap, asserted as a tripwire for either direction of drift, not a claim it's correct.
 Plus: the Codex plugin manifest is valid with the `+codex.<timestamp>` version suffix, and every
-Codex hook command carries `NOTIFY_AGENT_TYPE=codex` with hook-event coverage matching
-`TESTING.md`'s mapping table exactly.
+Codex hook command carries `NOTIFY_AGENT_TYPE=codex`, stays within 1–3s, and has hook-event coverage
+matching `TESTING.md`'s mapping table exactly — including that `PostToolUse` specifically maps to
+`event Working`, per `TODO.md`'s resolved "Distinguish auto-approved Codex permission requests from
+real waits": that's what clears a `WaitingForUser` the instant an auto-approved tool actually
+finishes, instead of leaving it rendered until some later unrelated `PreToolUse` (observed lingering
+for minutes in production on 2026-08-31/09-01). This manifest assertion is the only thing that would
+catch someone silently rewiring or dropping that hook — no runtime scenario exercises `hooks.json`
+itself, only the `notify event` calls it fires (already covered generically by scenario 1's
+Working→WaitingForUser→Finished walk).
 
 ### 15. [opt-in, done] Concurrent state-update race — `tests/test_known_issues.sh`
 

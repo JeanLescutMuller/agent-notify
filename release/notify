@@ -15,23 +15,25 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.0"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.3"  # hardcoded; bump manually per notable change
 
-# Fallbacks fed to renderers, never written to state.env, whenever a session
-# hasn't had a real transition yet on that axis - a brand-new session dir, or
-# one that survived a same-session-id resume (see cmd_refresh's 2.1), sits
-# with AGENT_STATE/USER_STATE empty for the whole window between session
-# start and the first hook/menu action that actually sets them. Every
-# renderer treats empty AGENT_STATE as "nothing to render" and ignores
-# USER_STATE entirely (see tmux-pane-bg), so without a default even a manual
-# tmux-menu toggle would have no visible effect during that window. Applied
-# live, right before a render call, never persisted to state.env: this keeps
-# state.env/`notify status` reporting the true on-disk value (still empty
-# until a real transition happens), and - more importantly - keeps it out of
-# the no-change comparisons in update_state_and_render, which must keep
-# seeing the raw empty value or a genuine first `event Finished` on a
-# brand-new session would equal this default and be silently treated as a
-# no-op instead of a real transition.
+# Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
+# (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
+# cmd_refresh's automatic REFRESH (session-start, the periodic debounce, `notify
+# refresh`). A brand-new session dir, or one that survived a same-session-id resume
+# (see cmd_refresh's 2.1), sits with AGENT_STATE/USER_STATE empty until the first
+# hook/menu action sets them; every renderer treats empty AGENT_STATE as "nothing to
+# render" and ignores USER_STATE entirely (see tmux-pane-bg), so without a default a
+# manual tmux-menu toggle in that window would have no visible effect. But applying it
+# to cmd_refresh's automatic render too would make every fresh session render as
+# AGENT_STATE_DEFAULT (e.g. paint a tmux pane "Finished" green) before the agent has
+# done anything - see the 2026-09-01 investigation. So this is applied only inside
+# deliberate-action call sites, live, right before their render call, never persisted
+# to state.env: this keeps state.env/`notify status` reporting the true on-disk value
+# (still empty until a real transition happens), and - more importantly - keeps it out
+# of the no-change comparison in update_state_and_render, which must keep seeing the
+# raw empty value or a genuine first `event Finished` on a brand-new session would
+# equal this default and be silently treated as a no-op instead of a real transition.
 AGENT_STATE_DEFAULT="Finished"
 USER_STATE_DEFAULT="Pending"
 
@@ -253,6 +255,20 @@ read_and_export_state() {
   export AGENT_STATE USER_STATE
 }
 
+# Reads AGENT_STATE straight off RENDER_PID's state.env on disk, bypassing a
+# caller's own (possibly stale, captured-earlier) exported copy. Exported so
+# renderer child processes can call it directly - e.g. sound-bell/sound-tts's
+# WaitingForUser debounce, re-checking state right before actually alerting -
+# without re-sourcing the whole file or re-implementing this lookup per
+# renderer (same convention as log()'s own export -f above). Plain grep/cut
+# rather than read_and_export_state's source: cheaper for one field, and
+# never executes state.env as shell code (see CLAUDE.md's trust-boundary
+# note) for a check a renderer performs on every debounced wait.
+current_agent_state() {
+  grep -m1 '^AGENT_STATE=' "$ROOT_DATA_DIR/$1/state.env" 2>/dev/null | cut -d= -f2-
+}
+export -f current_agent_state
+
 resolve_client_tty() {
   CLIENT_TTY=""
   if [ -n "$SESSION_TMUX_SESSION" ]; then
@@ -461,10 +477,10 @@ cmd_refresh() {
   echo "SESSION_TMUX_SESSION=$SESSION_TMUX_SESSION" >> "$f"
   echo "TRANSCRIPT_PATH=$TRANSCRIPT_PATH" >> "$f"
 
-  # 5. Refresh Renderers
+  # 5. Refresh Renderers. Raw (possibly empty) state, deliberately not defaulted -
+  # see AGENT_STATE_DEFAULT's comment: this is the automatic path, and a fresh
+  # session must render as "nothing to report" until a real transition happens.
   read_and_export_state "$RENDER_PID"
-  AGENT_STATE="${AGENT_STATE:-$AGENT_STATE_DEFAULT}" USER_STATE="${USER_STATE:-$USER_STATE_DEFAULT}"
-  export AGENT_STATE USER_STATE
   call_all_renderers "$RENDER_PID" "REFRESH"
 
   # 6. Proactive half of subagent-completion tracking: catches a suppressed

@@ -7,6 +7,17 @@ rlog() { log "${RENDER_PID:--}" "    sound-bell: $1"; }
 # manually shows it immediately, not just in the log file.
 rerr() { rlog "$1"; echo "notify: sound-bell: $1" >&2; }
 
+ring() {
+  local count="$1"
+  rerr "ring count=$count tty=$CLIENT_TTY"
+  local i=0
+  while [ "$i" -lt "$count" ]; do
+    printf '\a' > "$CLIENT_TTY" 2>/dev/null
+    i=$((i + 1))
+    if [ "$i" -lt "$count" ]; then sleep 0.3; fi
+  done
+}
+
 case "$TRIGGER" in
   AGENT_STATE_UPDATE)
     [ -z "$AGENT_STATE" ] && { rerr "skip (no agent state)"; exit 0; }
@@ -14,13 +25,25 @@ case "$TRIGGER" in
     count=$(echo "$RENDERER_SETTINGS" | jq -r ".\"sound-bell\".\"$AGENT_STATE\" // empty")
     [ -z "$count" ] && { rerr "skip (no count for $AGENT_STATE)"; exit 0; }
     [[ "$count" =~ ^[0-9]+$ ]] || { rerr "skip (invalid count '$count')"; exit 0; }
-    rerr "ring count=$count tty=$CLIENT_TTY"
-    i=0
-    while [ "$i" -lt "$count" ]; do
-      printf '\a' > "$CLIENT_TTY" 2>/dev/null
-      i=$((i + 1))
-      if [ "$i" -lt "$count" ]; then sleep 0.3; fi
-    done
+
+    # WaitingForUser is debounced: some agents (Codex's PermissionRequest,
+    # under an auto-approval policy) fire it even when nothing ever actually
+    # waits on a human, and there's no hook-payload signal to tell the two
+    # cases apart (see TODO.md). Wait a beat and re-check disk state right
+    # before ringing, so a fast auto-approval never rings the bell at all.
+    # (debounce only looked up for WaitingForUser - no point paying for a jq
+    # call on every other state transition, which is the common case.)
+    debounce=0
+    [ "$AGENT_STATE" = "WaitingForUser" ] && debounce=$(echo "$RENDERER_SETTINGS" | jq -r '."sound-bell".waiting_debounce_secs // 0')
+    if awk -v v="$debounce" 'BEGIN { exit !(v > 0) }'; then
+      rlog "debounce ${debounce}s before ringing"
+      ( sleep "$debounce"
+        [ "$(current_agent_state "$RENDER_PID")" = "WaitingForUser" ] || { rlog "debounce cancelled (state moved on)"; exit 0; }
+        ring "$count"
+      ) &
+    else
+      ring "$count"
+    fi
     ;;
   USER_STATE_UPDATE|REFRESH) rlog "skip trigger=$TRIGGER" ;;
 esac

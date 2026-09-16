@@ -1,4 +1,5 @@
 {
   "Finished": 0.7,
-  "WaitingForUser": 1.0
+  "WaitingForUser": 1.0,
+  "waiting_debounce_secs": 8
 }

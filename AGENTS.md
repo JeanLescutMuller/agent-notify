@@ -44,6 +44,17 @@ platform installer. Renderers must not inspect Claude variables or another agent
 
 Run `./install.sh` after any edit. It is idempotent and self-migrates the old Claude-only layout.
 
+Before every redeploy, bump `NOTIFY_VERSION` in `release/notify` (surfaced in `notify status`), and
+whenever a `release/codex/` file changed, also refresh the `+codex.<timestamp>` build suffix on
+`release/codex/.codex-plugin/plugin.json`'s `version` (`date '+%Y%m%d%H%M%S'`) — `tests/test_manifests.sh`
+enforces the suffix's shape. `codex plugin add` (which `install.sh` runs on every install) happens
+to resync the plugin cache's file contents in place even without a version bump, confirmed
+2026-08-31: `~/.codex/plugins/cache/notify-local/notify/<version>/` picked up an edited `notify`
+wrapper under the unchanged version `5.0.0+codex.20260829160928`. Bump anyway — an unbumped
+redeploy leaves no way to tell, from `notify.log` or `codex-hook-debug.jsonl` alone, which deployed
+code produced a given log line, and nothing guarantees today's in-place resync behavior is
+version-independent by design rather than by accident.
+
 | Surface | Location |
 |---|---|
 | Replaceable application | `~/opt/agent-notify/app/` |

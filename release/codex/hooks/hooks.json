@@ -54,6 +54,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NOTIFY_AGENT_TYPE=codex \"${PLUGIN_ROOT}/notify\" event Working",
+            "async": false,
+            "timeout": 2
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

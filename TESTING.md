@@ -24,6 +24,7 @@ branch-by-branch unit-test decomposition — see `tests/AGENTS.md` for the full 
 | `test_subagent_tracking.sh` | Fixture-transcript automation of the live T1/T2/T3/T5 scenarios below: single dispatched subagent, three parallel/staggered subagents, silent background completion resolved via `refresh` alone, and an orphaned subagent whose `pending_finish` marker never expires |
 | `test_tmux_focus.sh` | `user-focus` pane switching: focused pane → `Acknowledged`, other known panes → `Seen`, a plain shell pane untouched, `OnHold`/`Acknowledged` immune to the automatic path, empty `$TMUX_PANE` is a no-op |
 | `test_renderer_settings.sh` | The real three-file settings merge (default < global < session) reaching actual renderer dispatch, and a session-scoped `enabled=false` overriding a default-enabled renderer |
+| `test_waiting_debounce.sh` | `sound-bell`/`sound-tts`'s `waiting_debounce_secs` (see TODO.md's 2026-09-16 resolved entry): a `WaitingForUser` cleared within the window never rings/speaks, one that outlives it still does, `state.env`/other renderers update immediately regardless, and `waiting_debounce_secs=0` stays fully synchronous |
 | `test_notify_init.sh` | The managed tmux-hooks block lifecycle: `CLAUDE-NOTIFY`→`AGENT-NOTIFY` label migration, fresh deploy, idempotent redeploy, a real content change producing exactly one backup, and a hand-edited block being refused rather than clobbered |
 | `test_install.sh` | Fresh install / idempotent reinstall / preserved `config/` / clean `app/` replacement; old-plugin-dir settings migration (migrated once, never re-migrated or clobbered); Claude/Codex plugin registration against fake `claude`/`codex` binaries |
 | `test_manifests.sh` | Static `jq`/grep checks on both plugin manifests: absolute hook paths, sane timeouts, the documented `AskUserQuestion`/catch-all `PreToolUse` overlap, `NOTIFY_AGENT_TYPE=codex` always present, hook-event coverage matching this file's own mapping table |
@@ -83,6 +84,21 @@ Use another pane to interact with the test session. Expected native mappings are
 
 For Claude, `AskUserQuestion` still has the known catch-all `PreToolUse` overlap described in T4
 below; if the final state is incorrectly `Working`, capture the bounded log before changing hooks.
+
+For Codex, "Resume after answering/approving" is driven by its `PostToolUse` hook (mapped to
+`event Working` in `release/codex/hooks/hooks.json`), which fires the instant the tool actually
+finishes — whether a permission request was approved by a human or auto-resolved by
+`approvals_reviewer = "auto_review"` in `~/.codex/config.toml`. Before this was wired (resolved
+2026-09-03), nothing cleared `WaitingForUser` until the *next*, unrelated `PreToolUse`, so an
+auto-approved request could sit rendered as a wait for minutes. If Codex's `WaitingForUser` starts
+lingering again, check `PostToolUse` coverage first (`tests/test_manifests.sh` asserts it) before
+assuming it's a payload/timing issue.
+
+Separately, `sound-bell`/`sound-tts` hold `WaitingForUser` for `waiting_debounce_secs` (default
+8s) before actually ringing/speaking, re-checking `state.env` first - so during a live check, an
+auto-approved permission request may show `WaitingForUser` in `notify status`/the tmux pane color
+for a moment with no sound at all, while a real wait still alerts after the short delay. See
+TODO.md's 2026-09-16 resolved entry and `tests/test_waiting_debounce.sh`.
 
 After `Finished`, run the tmux menu acknowledgement (`Ctrl-B`, then `A`). `USER_STATE` should become
 `Acknowledged`, and the command must not print `No active session found`.

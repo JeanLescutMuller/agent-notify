@@ -64,6 +64,10 @@ run_notify event Finished
 assert_log_contains "$ROOT_DATA_DIR/notify.log" "sound-bell: ring count=5" \
   "global override reaches the actual renderer for Finished"
 
+# waiting_debounce_secs defaults to 8 (see test_waiting_debounce.sh for that
+# feature itself) - zero it here so this scenario's WaitingForUser assertion
+# stays synchronous; it's testing settings-merge precedence, not the debounce.
+run_notify sound-bell waiting_debounce_secs=0
 run_notify update USER_STATE Pending
 run_notify event WaitingForUser
 assert_log_contains "$ROOT_DATA_DIR/notify.log" "sound-bell: ring count=9" \

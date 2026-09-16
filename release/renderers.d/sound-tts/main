@@ -50,6 +50,13 @@ resolve_tts_name() {
   TTS_NAME_REASON="fallback default"
 }
 
+speak() {
+  local volume="$1"
+  resolve_tts_name
+  rerr "speak tts_name=$TTS_NAME volume=$volume reason=$TTS_NAME_REASON tty=$CLIENT_TTY"
+  printf '\033Ptmux;\033\033]1337;Custom=id=tts:[[volm %s]] %s\a\033\\' "$volume" "$TTS_NAME" > "$CLIENT_TTY" 2>/dev/null
+}
+
 case "$TRIGGER" in
   AGENT_STATE_UPDATE)
     [ -z "$AGENT_STATE" ] && { rerr "skip (no agent state)"; exit 0; }
@@ -58,9 +65,24 @@ case "$TRIGGER" in
     volume=$(echo "$RENDERER_SETTINGS" | jq -r ".\"sound-tts\".\"$AGENT_STATE\" // 0")
     awk -v v="$volume" 'BEGIN { exit !(v > 0) }' || { rerr "skip (volume 0 for state $AGENT_STATE)"; exit 0; }
 
-    resolve_tts_name
-    rerr "speak tts_name=$TTS_NAME volume=$volume reason=$TTS_NAME_REASON tty=$CLIENT_TTY"
-    printf '\033Ptmux;\033\033]1337;Custom=id=tts:[[volm %s]] %s\a\033\\' "$volume" "$TTS_NAME" > "$CLIENT_TTY" 2>/dev/null
+    # WaitingForUser is debounced: some agents (Codex's PermissionRequest,
+    # under an auto-approval policy) fire it even when nothing ever actually
+    # waits on a human, and there's no hook-payload signal to tell the two
+    # cases apart (see TODO.md). Wait a beat and re-check disk state right
+    # before speaking, so a fast auto-approval never speaks at all.
+    # (debounce only looked up for WaitingForUser - no point paying for a jq
+    # call on every other state transition, which is the common case.)
+    debounce=0
+    [ "$AGENT_STATE" = "WaitingForUser" ] && debounce=$(echo "$RENDERER_SETTINGS" | jq -r '."sound-tts".waiting_debounce_secs // 0')
+    if awk -v v="$debounce" 'BEGIN { exit !(v > 0) }'; then
+      rlog "debounce ${debounce}s before speaking"
+      ( sleep "$debounce"
+        [ "$(current_agent_state "$RENDER_PID")" = "WaitingForUser" ] || { rlog "debounce cancelled (state moved on)"; exit 0; }
+        speak "$volume"
+      ) &
+    else
+      speak "$volume"
+    fi
     ;;
   USER_STATE_UPDATE|REFRESH) rlog "skip trigger=$TRIGGER" ;;
   STATUS)
