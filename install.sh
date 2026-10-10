@@ -193,7 +193,25 @@ if $install_codex; then
   if ! codex plugin marketplace list 2>/dev/null | grep -q "notify-local"; then
     codex plugin marketplace add "$CODEX_MARKETPLACE_ROOT"
   fi
+
+  # Codex freezes PLUGIN_ROOT into active sessions. Remember every cache
+  # path they may still call before `plugin add` replaces the installed
+  # version, then keep those old paths as compatibility links to the live
+  # deployed wrapper. New sessions continue to use Codex's current cache.
+  codex_cache_root="$HOME/.codex/plugins/cache/notify-local/notify"
+  active_codex_plugin_roots=()
+  for cached_root in "$codex_cache_root"/*; do
+    [ -e "$cached_root" ] || [ -L "$cached_root" ] || continue
+    active_codex_plugin_roots+=("$cached_root")
+  done
   codex plugin add notify@notify-local
+  current_codex_version="$(jq -r '.version' "$DEST/codex/.codex-plugin/plugin.json")"
+  for cached_root in "${active_codex_plugin_roots[@]}"; do
+    [ "$(basename "$cached_root")" = "$current_codex_version" ] && continue
+    mkdir -p "$(dirname "$cached_root")"
+    replace_with_symlink "$cached_root" "$DEST/codex"
+    echo "    preserved active Codex plugin root: $cached_root"
+  done
 else
   echo "==> Codex integration skipped (NOTIFY_INSTALL_CODEX=$INSTALL_CODEX)"
 fi
@@ -208,5 +226,5 @@ if $install_claude; then
   echo "    Restart active Claude Code sessions so they load the updated hooks."
 fi
 if $install_codex; then
-  echo "    Start a new Codex session so it loads the notify hooks."
+  echo "    New Codex sessions load the updated hooks; active sessions keep a compatible wrapper path."
 fi

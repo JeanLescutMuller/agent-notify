@@ -3,7 +3,9 @@
 
 adapter_load_context() {
   AGENT_TYPE="codex"
+  AGENT_SESSION_ID="${NOTIFY_AGENT_SESSION_ID:-${AGENT_SESSION_ID:-}}"
   AGENT_WD="${NOTIFY_AGENT_WD:-${AGENT_WD:-$PWD}}"
+  ADAPTER_TRANSCRIPT_PATH="${NOTIFY_TRANSCRIPT_PATH:-${ADAPTER_TRANSCRIPT_PATH:-}}"
 }
 
 adapter_resolve_agent_pid() {
@@ -17,5 +19,54 @@ adapter_resolve_agent_pid() {
   '
 }
 
-adapter_resolve_session_name() { return 0; }
+adapter_resolve_session_name() {
+  local session_id="$1" index="${CODEX_HOME:-$HOME/.codex}/session_index.jsonl"
+  [ -n "$session_id" ] && [ -r "$index" ] || return 0
+
+  # The index is append-only: the last matching record wins. Cache the result
+  # per notify session; inode, size and precise mtime catch appends/replacements
+  # (including renames within one second) without parsing JSON on cache hits.
+  local stamp cache="" name tmp
+  case "$OSTYPE" in
+    darwin*) stamp="$(stat -f '%i:%z:%.9Fm' "$index" 2>/dev/null)" ;;
+    *)       stamp="$(stat -c '%i:%s:%y' "$index" 2>/dev/null)" ;;
+  esac
+  local cached_id="" cached_index="" cached_stamp="" cached_name=""
+  if [ -n "${SESSION_DATA_DIR:-}" ] && [ -n "$stamp" ]; then
+    cache="$SESSION_DATA_DIR/codex-session-name.env"
+    [ -r "$cache" ] && source "$cache"
+    if [ "$cached_id" = "$session_id" ] && [ "$cached_index" = "$index" ] && [ "$cached_stamp" = "$stamp" ]; then
+      printf '%s' "$cached_name"
+      return 0
+    fi
+  fi
+
+  # Ignore malformed/partially appended lines and non-string names. An absent
+  # title remains empty so the renderer's normal fallbacks still apply.
+  name="$(jq -nRr --arg id "$session_id" '
+    reduce inputs as $line ("";
+      ($line | try fromjson catch null) as $entry |
+      if ($entry | type) == "object" and $entry.id == $id
+         and ($entry.thread_name | type) == "string"
+      then $entry.thread_name else . end)
+  ' "$index" 2>/dev/null)" || return 0
+
+  if [ -n "$cache" ] && mkdir -p "$SESSION_DATA_DIR" 2>/dev/null; then
+    if tmp="$(mktemp "$cache.XXXXXX" 2>/dev/null)"; then
+      if { printf 'cached_id=%q\ncached_index=%q\ncached_stamp=%q\ncached_name=%q\n' \
+          "$session_id" "$index" "$stamp" "$name" > "$tmp" && mv -f "$tmp" "$cache"; } 2>/dev/null; then
+        :
+      else
+        rm -f "$tmp"
+      fi
+    fi
+  fi
+  printf '%s' "$name"
+}
+
+# Called on status and before rendering a changed agent state. The session id
+# comes from the target session's saved metadata, including during --all.
+adapter_refresh_session_name() {
+  SESSION_NAME="$(adapter_resolve_session_name "$AGENT_SESSION_ID")"
+}
 adapter_has_pending_work() { return 1; }

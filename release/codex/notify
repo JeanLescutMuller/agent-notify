@@ -1,4 +1,96 @@
 #!/bin/bash
 # Codex plugin entrypoint into the shared agent-neutral runtime.
-set -e
-exec "${NOTIFY_RUNTIME_DIR:-$HOME/opt/agent-notify}/app/notify" "$@"
+#
+# Notification rendering is advisory: a broken renderer must be recorded, but
+# must never turn an otherwise-successful Codex action into "Hook failed".
+
+runtime="${NOTIFY_RUNTIME_DIR:-$HOME/opt/agent-notify}/app/notify"
+root_data_dir="${NOTIFY_ROOT_DATA_DIR:-/tmp/agent-notify-${USER:-$(whoami)}}"
+hook_input="$(cat 2>/dev/null || true)"
+
+# Codex documents these fields on every command hook's stdin. Keep native JSON
+# out of the core/renderers and translate it into the adapter contract here.
+if printf '%s' "$hook_input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  NOTIFY_AGENT_SESSION_ID="$(printf '%s' "$hook_input" | jq -r '.session_id // empty')"
+  NOTIFY_AGENT_WD="$(printf '%s' "$hook_input" | jq -r '.cwd // empty')"
+  NOTIFY_TRANSCRIPT_PATH="$(printf '%s' "$hook_input" | jq -r '.transcript_path // empty')"
+  hook_event="$(printf '%s' "$hook_input" | jq -r '.hook_event_name // "unknown"')"
+else
+  hook_event="invalid-input"
+fi
+export NOTIFY_AGENT_TYPE=codex NOTIFY_AGENT_SESSION_ID NOTIFY_AGENT_WD NOTIFY_TRANSCRIPT_PATH
+
+trace=false
+case "${NOTIFY_CODEX_TRACE:-}" in 1|true) trace=true ;; esac
+[ -f "$root_data_dir/.trace_codex_hooks" ] && trace=true
+
+now_ms() {
+  python3 -c 'import time; print(time.time_ns() // 1000000)' 2>/dev/null \
+    || printf '%s000\n' "$(date '+%s')"
+}
+
+stdout_file="$(mktemp "${TMPDIR:-/tmp}/agent-notify-codex-stdout.XXXXXX")" || stdout_file=/dev/null
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/agent-notify-codex-stderr.XXXXXX")" || stderr_file=/dev/null
+$trace && started_ms="$(now_ms)"
+
+# Finish comfortably before Codex's outer deadline. Most calls remain fully
+# synchronous (and therefore ordered); only a genuinely stuck runtime is cut
+# off. The watchdog itself owns no hook stdio pipe.
+case "$*" in
+  init|session-start) runtime_timeout=2 ;;
+  *) runtime_timeout=1.5 ;;
+esac
+timeout_marker="${TMPDIR:-/tmp}/agent-notify-codex-timeout.$$"
+rm -f "$timeout_marker"
+"$runtime" "$@" </dev/null >"$stdout_file" 2>"$stderr_file" &
+runtime_pid=$!
+(
+  sleep "$runtime_timeout"
+  : > "$timeout_marker"
+  kill "$runtime_pid" 2>/dev/null || exit 0
+  sleep 0.1
+  kill -KILL "$runtime_pid" 2>/dev/null || true
+) </dev/null >/dev/null 2>&1 &
+watchdog_pid=$!
+wait "$runtime_pid"
+runtime_status=$?
+kill "$watchdog_pid" 2>/dev/null || true
+wait "$watchdog_pid" 2>/dev/null || true
+if [ -f "$timeout_marker" ]; then
+  runtime_status=124
+  printf 'notify runtime exceeded its %ss internal deadline' "$runtime_timeout" > "$stderr_file"
+fi
+rm -f "$timeout_marker"
+
+if $trace || [ "$runtime_status" -ne 0 ]; then
+  ended_ms="$(now_ms)"
+  started_ms="${started_ms:-$ended_ms}"
+  stdout_bytes="$(wc -c < "$stdout_file" 2>/dev/null | tr -d ' ')"
+  stderr_bytes="$(wc -c < "$stderr_file" 2>/dev/null | tr -d ' ')"
+  stderr_preview=""
+  [ "$runtime_status" -eq 0 ] || stderr_preview="$(head -c 1000 "$stderr_file" 2>/dev/null)"
+  mkdir -p "$root_data_dir" 2>/dev/null || true
+  jq -cn \
+    --arg timestamp "$(date '+%Y-%m-%dT%H:%M:%S')" \
+    --arg event "$hook_event" \
+    --arg command "$*" \
+    --arg session_id "${NOTIFY_AGENT_SESSION_ID:-}" \
+    --arg stderr_preview "$stderr_preview" \
+    --argjson started_ms "${started_ms:-0}" \
+    --argjson ended_ms "${ended_ms:-0}" \
+    --argjson status "$runtime_status" \
+    --argjson stdout_bytes "${stdout_bytes:-0}" \
+    --argjson stderr_bytes "${stderr_bytes:-0}" \
+    '{timestamp:$timestamp,event:$event,command:$command,session_id:$session_id,
+      started_ms:$started_ms,ended_ms:$ended_ms,duration_ms:($ended_ms-$started_ms),
+      status:$status,stdout_bytes:$stdout_bytes,stderr_bytes:$stderr_bytes,
+      stderr_preview:$stderr_preview}' \
+    >> "$root_data_dir/codex-hook-trace.jsonl" 2>/dev/null || true
+fi
+
+[ "$stdout_file" = /dev/null ] || rm -f "$stdout_file"
+[ "$stderr_file" = /dev/null ] || rm -f "$stderr_file"
+
+# Deliberately swallow runtime failures and all output. Codex treats exit 0
+# with no output as success for every event this integration registers.
+exit 0

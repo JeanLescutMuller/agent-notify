@@ -105,4 +105,36 @@ assert_log_not_contains "$ROOT_DATA_DIR/notify.log" "[$PID_ZERO]     sound-bell:
 
 pass "sound-bell: waiting_debounce_secs=0 preserves the old fully-synchronous behavior"
 
+# --- Scenario 4: background work never holds the hook's pipes -------------
+# Codex waits for EOF on a hook's stdout/stderr, not just for its exit: a
+# debounce subshell (or the debounced `refresh --all`) still holding those
+# pipes kept PermissionRequest running past its 2s deadline ("Hook failed",
+# 2026-10-06) and got killed before ringing. Reproduce that runner shape by
+# piping both streams into cat, with the periodic refresh also due.
+PID_PIPE=93004
+PIPE_DEBOUNCE_SECS=4
+run_notify "$PID_PIPE" session-start
+run_notify "$PID_PIPE" sound-bell waiting_debounce_secs=$PIPE_DEBOUNCE_SECS
+run_notify "$PID_PIPE" sound-tts waiting_debounce_secs=$PIPE_DEBOUNCE_SECS
+echo 0 > "$ROOT_DATA_DIR/.last_refresh"
+
+started=$(date '+%s')
+HOME="$TEST_ROOT/home" PATH="$BIN:$PATH" TMUX_PANE="%1" \
+  NOTIFY_AGENT_TYPE=generic NOTIFY_AGENT_SESSION_ID="debounce-test-$PID_PIPE" \
+  NOTIFY_AGENT_WD="$PROJECT_DIR" NOTIFY_AGENT_PID="$PID_PIPE" \
+  NOTIFY_ROOT_DATA_DIR="$ROOT_DATA_DIR" NOTIFY_CONFIG_DIR="$CONFIG_DIR" \
+  NOTIFY_RENDER_PID="$PID_PIPE" \
+  bash "$NOTIFY" event WaitingForUser 2>&1 | cat > /dev/null
+elapsed=$(( $(date '+%s') - started ))
+[ "$elapsed" -lt 3 ] \
+  || fail "piped-hook: event WaitingForUser held its pipes ${elapsed}s (debounce ${PIPE_DEBOUNCE_SECS}s leaked into the hook)"
+
+# Let the detached job finish inside TEST_ROOT before the EXIT trap removes it.
+run_notify "$PID_PIPE" event Working
+sleep $((PIPE_DEBOUNCE_SECS + 1))
+assert_log_contains "$ROOT_DATA_DIR/notify.log" "[$PID_PIPE]     sound-bell: debounce cancelled" \
+  "piped-hook: the detached sound-bell debounce still runs to completion"
+
+pass "sound-bell/sound-tts/refresh: background work is detached from the hook's stdout/stderr"
+
 printf '\nAll %s waiting-debounce scenarios passed.\n' "$pass_count"

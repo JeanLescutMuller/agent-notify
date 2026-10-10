@@ -1,6 +1,6 @@
 {
   "name": "notify",
-  "version": "5.0.0+codex.20260903201458",
+  "version": "5.0.0+codex.20261006202220",
   "description": "Terminal notifications for Codex and other coding agents.",
   "author": {
     "name": "Jean Lescut-Muller"

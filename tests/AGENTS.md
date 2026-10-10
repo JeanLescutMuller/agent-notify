@@ -4,7 +4,7 @@ End-to-end scenarios in `tests/`, not a unit-test decomposition of every branch.
 is one test *scenario* — a realistic sequence of calls against `release/notify` (or `install.sh`)
 that bundles several related assertions along the way, the same shape `test_framework.sh`'s
 original `test_lifecycle`/`test_popup_targeting`/`test_refresh_all_isolation`/`test_renderers`
-already used. All 16 scenarios below are implemented; this file stays as the map explaining what
+already used. All 18 scenarios below are implemented; this file stays as the map explaining what
 each one covers and why, for whoever touches these tests next.
 
 ## Why scenarios, not unit tests
@@ -56,7 +56,9 @@ so it doesn't hardcode how many such lines the file has.
 
 Two sessions refreshed together must not leak adapter/transcript metadata into each other.
 Extended to also assert `AGENT_PID` and `SESSION_NAME` stay isolated, not just
-`AGENT_TYPE`/`TRANSCRIPT_PATH`.
+`AGENT_TYPE`/`TRANSCRIPT_PATH`. The invoker is also tested as a later member of
+the sweep (after loading another session), and a detached periodic sweep after
+`status --all` must retain the original caller rather than the last exported session.
 
 ### 4. [done] All-renderer output — `test_renderers` + `test_renderer_disabled_is_skipped`
 
@@ -195,6 +197,21 @@ files are sourced as shell") is still exactly as documented. Deterministic, not 
 the opt-in file alongside scenario 15 because both document accepted risk rather than assert
 correctness, not because this one is racy.
 
+### 17. [done] Codex hook wrapper — `tests/test_codex_hook_wrapper.sh`
+
+A fake shared runtime receives a representative Codex stdin payload through the real plugin
+wrapper. The scenario proves `session_id`/`cwd`/`transcript_path` translation, zero hook
+stdout/stderr, and fail-open exit `0` when the runtime itself emits output and exits non-zero. A
+second slow-runtime pass exercises the watchdog and proves an `Interrupt` invocation ends before
+Codex's 3s outer deadline while recording status 124 in the trace.
+
+### 18. [done] Codex session titles — `tests/test_codex_session_name.sh`
+
+An isolated Codex index with multiple titles flows through the real runtime into status and
+the iTerm2 TTS sequence. The scenario checks escaping and source priority, cached lookups,
+same-second renames, missing/malformed records, titles generated after startup, and reused panes.
+The target session's saved identity must win over an unrelated invoker's session id.
+
 ---
 
 ## File layout
@@ -211,8 +228,9 @@ correctness, not because this one is racy.
 - `tests/test_manifests.sh` — scenario 14 (pure static checks, fastest file in the suite, no
   temp-dir setup at all).
 - `tests/test_known_issues.sh` (`RUN_KNOWN_ISSUES=1`) — scenarios 15–16.
+- `tests/test_codex_hook_wrapper.sh` — scenario 17.
+- `tests/test_codex_session_name.sh` — scenario 18.
 
-That's 9 files (8 scenario files + the shared helper), 16 scenarios — up from the original 1 file
-/ 4 scenarios, still small enough to read end to end in one sitting. Run the whole suite with
+Run the whole suite with
 `for t in tests/test_*.sh; do "$t"; done` (see `TESTING.md`); `tests/test_resolve_session_name.py`
 runs separately via `python3 -m unittest discover -s tests`.

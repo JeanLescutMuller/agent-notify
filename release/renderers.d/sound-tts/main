@@ -76,10 +76,13 @@ case "$TRIGGER" in
     [ "$AGENT_STATE" = "WaitingForUser" ] && debounce=$(echo "$RENDERER_SETTINGS" | jq -r '."sound-tts".waiting_debounce_secs // 0')
     if awk -v v="$debounce" 'BEGIN { exit !(v > 0) }'; then
       rlog "debounce ${debounce}s before speaking"
+      # Detached from the hook's stdio: a hook runner that waits for pipe EOF
+      # (Codex does) would otherwise block for the whole sleep, blow its 2s
+      # deadline ("Hook failed") and kill this job before it ever alerts.
       ( sleep "$debounce"
         [ "$(current_agent_state "$RENDER_PID")" = "WaitingForUser" ] || { rlog "debounce cancelled (state moved on)"; exit 0; }
         speak "$volume"
-      ) &
+      ) </dev/null >/dev/null 2>&1 &
     else
       speak "$volume"
     fi

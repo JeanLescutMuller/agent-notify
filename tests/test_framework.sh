@@ -50,6 +50,12 @@ test_lifecycle() {
 
   run_notify "$root" "$adapter" "$render_pid" session-start
   assert_file_contains "$root/$render_pid/static.env" "AGENT_TYPE=$adapter" "$adapter adapter selected"
+  if [ "$adapter" = "codex" ]; then
+    assert_file_contains "$root/$render_pid/static.env" "AGENT_SESSION_ID=codex-test-session" \
+      "codex adapter persists the wrapper-provided session id"
+    assert_file_contains "$root/$render_pid/static.env" "AGENT_WD=$PROJECT_DIR" \
+      "codex adapter persists the wrapper-provided working directory"
+  fi
 
   run_notify "$root" "$adapter" "$render_pid" event Working
   assert_file_contains "$root/$render_pid/state.env" "AGENT_STATE=Working" "$adapter Working state"
@@ -159,6 +165,44 @@ test_refresh_all_isolation() {
   assert_file_contains "$root/$first/static.env" "SESSION_NAME=codex-one-name" "refresh-all preserves first SESSION_NAME"
   assert_file_contains "$root/$second/static.env" "AGENT_PID=202" "refresh-all preserves second AGENT_PID"
   assert_file_contains "$root/$second/static.env" "SESSION_NAME=claude-two-name" "refresh-all preserves second SESSION_NAME"
+
+  # The invoker must itself be in the sweep, AFTER another session. Otherwise
+  # loading a neighbor never exercises the current-session metadata branch.
+  local current neighbor
+  current=$(printf '%s\n' "$first" "$second" | LC_ALL=C sort | tail -1)
+  neighbor=$(printf '%s\n' "$first" "$second" | LC_ALL=C sort | head -1)
+  cp "$root/$neighbor/static.env" "$TEST_ROOT/neighbor-before"
+  HOME="$TEST_ROOT/home" NOTIFY_ROOT_DATA_DIR="$root" NOTIFY_CONFIG_DIR="$TEST_ROOT/config" \
+    NOTIFY_RENDER_PID="$current" NOTIFY_AGENT_TYPE=generic \
+    NOTIFY_AGENT_SESSION_ID=current-session NOTIFY_AGENT_WD=/tmp/current \
+    NOTIFY_AGENT_PID=9191 NOTIFY_SESSION_NAME=current-name \
+    NOTIFY_TRANSCRIPT_PATH=/tmp/current.jsonl \
+    bash "$NOTIFY" refresh --all
+  assert_file_contains "$root/$current/static.env" 'AGENT_TYPE=generic' 'sweep keeps the invoking adapter'
+  assert_file_contains "$root/$current/static.env" 'AGENT_SESSION_ID=current-session' 'sweep keeps the invoking session id'
+  assert_file_contains "$root/$current/static.env" 'AGENT_WD=/tmp/current' 'sweep keeps the invoking directory'
+  assert_file_contains "$root/$current/static.env" 'AGENT_PID=9191' 'sweep keeps the invoking agent PID'
+  assert_file_contains "$root/$current/static.env" 'SESSION_NAME=current-name' 'sweep keeps the invoking name'
+  assert_file_contains "$root/$current/static.env" 'TRANSCRIPT_PATH=/tmp/current.jsonl' 'sweep keeps the invoking transcript'
+  diff <(sed '/^TIMESTAMP=/d' "$TEST_ROOT/neighbor-before") \
+    <(sed '/^TIMESTAMP=/d' "$root/$neighbor/static.env") || fail 'sweep changes only its invoking session identity'
+
+  # A detached periodic sweep must also retain the original invocation, not
+  # re-import metadata exported by the last STATUS renderer in the parent.
+  printf '0\n' > "$root/.last_refresh"
+  HOME="$TEST_ROOT/home" NOTIFY_ROOT_DATA_DIR="$root" NOTIFY_CONFIG_DIR="$TEST_ROOT/config" \
+    NOTIFY_RENDER_PID="$neighbor" NOTIFY_AGENT_TYPE=generic \
+    NOTIFY_AGENT_SESSION_ID=background-caller NOTIFY_AGENT_WD=/tmp/background \
+    AGENT_PID=8181 NOTIFY_SESSION_NAME=background-name \
+    bash "$NOTIFY" status --all > "$TEST_ROOT/background-status"
+  local attempt
+  for attempt in {1..50}; do
+    grep -q '^AGENT_PID=8181$' "$root/$neighbor/static.env" 2>/dev/null && break
+    sleep 0.1
+  done
+  assert_file_contains "$root/$neighbor/static.env" 'AGENT_SESSION_ID=background-caller' 'detached sweep keeps invoking session id'
+  assert_file_contains "$root/$neighbor/static.env" 'AGENT_PID=8181' 'detached sweep keeps invoking PID before STATUS changed exports'
+  assert_file_contains "$root/$current/static.env" 'AGENT_SESSION_ID=current-session' 'detached sweep preserves its other session'
   pass "refresh --all keeps sessions isolated"
 }
 

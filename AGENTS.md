@@ -93,10 +93,11 @@ manifest or hook-command change.
 
 ### Accepted trust boundary
 
-`static.env` and `state.env` are unquoted assignments that are later sourced. Spaces can break
-parsing and shell syntax in metadata can execute. This is deliberately accepted while the project
-is single-user and all adapters/session names are trusted. Do not expose it to untrusted metadata
-without replacing the files with JSON or safe serialization. The issue is tracked in `TODO.md`.
+`static.env` and `state.env` are shell assignments that are later sourced. `SESSION_NAME` is
+escaped with Bash `printf %q`; other metadata remains unquoted. Spaces in those other fields can
+break parsing and shell syntax can execute. This is deliberately accepted while the project is
+single-user and all adapters are trusted. Do not expose it to untrusted metadata without replacing
+the files with JSON or safe serialization. The issue is tracked in `TODO.md`.
 
 ## Lifecycle and commands
 
@@ -122,6 +123,8 @@ User/technical commands:
 | `notify <renderer> enable\|disable\|key=value [--global]` | Renderer settings |
 
 `notify update CLAUDE_STATE VALUE` is accepted only for v4 compatibility.
+
+`update`, `wipe`, `refresh` and `<renderer>` print a one-line confirmation, e.g. `sound-tts: enabled=false (session 12345)`. Hook-driven commands (`session-start`, `event`, `session-end`, `user-focus`, `init`) must stay silent: Claude injects SessionStart hook stdout into the chat and tmux `run-shell` pops stdout over the pane. `NOTIFY_QUIET=true` silences the confirmation for scripted callers (the tmux popup menu sets it).
 
 ### Invocation terminology
 

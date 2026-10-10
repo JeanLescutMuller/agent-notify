@@ -2,6 +2,21 @@
 
 ## Correctness
 
+### Register the real Codex terminal when hooks run in a shared daemon
+
+Confirmed 2026-10-08: the CLI for this session runs in tmux pane `%8`, but its shared
+app-server inherited `TMUX_PANE=%4` from a different terminal. Hook stdin supplies the
+session ID, not a terminal/pane ID. The current PID fallback consequently updates
+the wrong pane. An isolated reproduction through the real Codex wrapper confirms it.
+Do not infer ownership from a title, project directory, or inherited daemon pane.
+
+A terminal-side registration can pair the actual session ID with the CLI PID and
+pane, then let daemon hooks resolve and validate that pairing. The existing Codex
+statusline has both pieces of information, but using it needs an explicitly agreed
+optional integration with agent-statusline. Until routing is corrected, v5.9's
+refresh-isolation fix does NOT resolve the missing background/title notifications,
+and already-corrupted session records still need careful repair.
+
 ### Serialize overlapping state updates
 
 `update_state_and_render` performs an unlocked read/modify/write/render sequence. Concurrent hook
@@ -47,9 +62,10 @@ cancel the stale marker.
 
 ### Runtime `.env` files are sourced as shell
 
-`static.env` and `state.env` are written as unquoted shell assignments and later sourced. Values
-containing spaces can fail to load, and shell syntax in adapter metadata, session titles, working
-directories, tmux names, or manually supplied state values can execute code when the file is read.
+`static.env` and `state.env` are shell assignments that are later sourced. `SESSION_NAME` is now
+escaped with `printf %q` (v5.8), but other fields remain unquoted. Spaces in those fields can fail
+to load, and shell syntax in working directories, tmux names, or manually supplied state values
+can execute code when the file is read.
 
 This should use JSON or safely escaped assignments before the project accepts untrusted adapters
 or is installed for other users. It is intentionally not being fixed while this remains a trusted,
@@ -87,6 +103,42 @@ voice pool and rate in persistent renderer settings.
 
 ## Resolved history
 
+- **Cross-session identity corruption during refresh (2026-10-08):** v5.9 captures the
+  invoking adapter/session/PID/directory once, before loading saved sessions. Previously,
+  a current session visited later in `refresh --all` adopted the preceding session's
+  identity, sometimes wiping its own state. Detached periodic sweeps now retain the
+  original invocation in a subshell instead of re-importing another session's exported
+  metadata. Regression tests cover an invoker later in the sweep and a periodic sweep
+  after `status --all`. The separate Codex daemon-to-terminal routing issue above remains open.
+- **Codex session title missing from TTS (2026-10-08):** v5.8 resolves the last matching
+  `thread_name` from Codex's local session index and caches it per session. Status and changed
+  agent states detect index changes, so late titles/renames reach TTS without restarting.
+  `SESSION_NAME` is shell-escaped on persistence, preserving spaces and literal shell syntax.
+  Explicit TTS settings still win; missing data keeps the existing fallback order.
+
+- **Remaining Codex `Hook failed` after the debounce fix (2026-10-06):** v5.4 detached the known
+  debounce/refresh subprocesses, but a newly started Codex session still showed `Hook failed`.
+  The integration still had three structural problems: its wrapper ignored Codex's documented
+  stdin JSON context, every renderer failure/output was allowed to reach the hook runner, and full
+  synchronous renderer passes had only a 2s outer budget (live `Finished` passes visibly crossed
+  a timestamp boundary). v5.5 makes this advisory integration fail-open: the wrapper translates
+  `session_id`/`cwd`/`transcript_path`, captures all output, traces non-zero exits, always returns
+  success with no hook output, and uses an internal watchdog that ends before each outer deadline.
+  The already-reviewed outer hook definitions remain byte-for-byte stable so Codex's persisted
+  trust stays valid; calls stay synchronous and ordered unless the runtime is genuinely stuck.
+  The installer also preserves replaced Codex cache roots as links to the live wrapper because
+  active sessions freeze `PLUGIN_ROOT` and otherwise call a path removed by `codex plugin add`.
+  Regression: `tests/test_codex_hook_wrapper.sh` covers context translation, output suppression,
+  non-zero failure, diagnostics, and a hung runtime.
+- **Codex `Hook failed` from the WaitingForUser debounce (2026-10-06):** Codex showed `Hook
+  failed` in a normal session. Codex waits for EOF on a hook's stdout/stderr, not only for exit;
+  the 2026-09-16 debounce subshells (and the periodic `refresh --all &`) inherited those pipes, so
+  every Codex `PermissionRequest` hook stayed open for the full 8s debounce, blew its 2s deadline,
+  and was killed together with the pending alert. `notify.log` for that session: 15/15 debounced
+  bell/TTS alerts never fired nor logged a cancellation, while Claude sessions (which don't wait on
+  the pipes) fired 9/9. Fix: all three background jobs run with `</dev/null >/dev/null 2>&1`.
+  Regression: `tests/test_waiting_debounce.sh` scenario 4 pipes both streams into `cat` and fails
+  if the hook holds them for 3s+ (it held them 4s, the full debounce, before the fix).
 - **sound-bell/sound-tts alert on a WaitingForUser that auto-clears (2026-09-16):** The
   2026-09-03 `PostToolUse` fix below stops `WaitingForUser` from *lingering*, but it still
   applies and renders instantly - so every Codex `PermissionRequest`, auto-approved or not,

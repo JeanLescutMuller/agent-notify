@@ -66,6 +66,8 @@ focus updates until it is changed deliberately.
 | `notify RENDERER enable\|disable` | Toggle a renderer |
 | `notify RENDERER key=value [--global]` | Set a session or persistent global override |
 
+`update`, `wipe`, `refresh` and the renderer commands print a one-line confirmation; set `NOTIFY_QUIET=true` to silence it.
+
 Examples:
 
 ```bash

@@ -63,10 +63,13 @@ test_codex_hooks_manifest() {
   [ "$expected_keys" = "$actual_keys" ] || \
     fail "codex hooks.json event coverage changed - expected [$expected_keys], got [$actual_keys]"
 
+  # Keep the already-reviewed definitions stable: changing timeout fields
+  # invalidates Codex's persisted hook trust. The wrapper's shorter internal
+  # watchdog is what guarantees completion before these outer deadlines.
   local timeouts bad_timeouts
   timeouts=$(jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .timeout' "$CODEX_HOOKS")
   bad_timeouts=$(printf '%s\n' "$timeouts" | awk '$1 < 1 || $1 > 3' || true)
-  [ -z "$bad_timeouts" ] || fail "every codex hook timeout should stay within the documented 1-3s bound (found: $bad_timeouts)"
+  [ -z "$bad_timeouts" ] || fail "every codex hook timeout should stay within the trust-stable 1-3s bound (found: $bad_timeouts)"
 
   # TODO.md ("Distinguish auto-approved Codex permission requests from real
   # waits", resolved 2026-09-03): PostToolUse must map to `event Working` -

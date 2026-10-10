@@ -67,8 +67,16 @@ adapter_has_pending_work <transcript-path>
 - `adapter_load_context` may set `AGENT_SESSION_ID`, `AGENT_WD`, `AGENT_PID`, and
   `ADAPTER_TRANSCRIPT_PATH`.
 - PID and session-name resolvers print their value or print nothing.
+- Optional `adapter_refresh_session_name` updates the loaded session's `SESSION_NAME` before
+  status output and changed-agent-state rendering. The default is a no-op; adapters can cache
+  expensive lookups under `SESSION_DATA_DIR`. The core persists changed names as escaped shell
+  assignments. The callback must use the loaded session's identity, not the invoker's context.
 - `adapter_has_pending_work` returns success while work remains outstanding and failure otherwise.
 - Agent-specific helpers belong beside the adapter, not under a renderer.
+
+The core snapshots the invoking adapter's identity once before loading any saved
+sessions. Both explicit `refresh --all` and detached periodic sweeps retain that
+snapshot; reading a neighboring session must never replace the caller's identity.
 
 Renderers receive only normalized fields such as `AGENT_TYPE`, `AGENT_SESSION_ID`, `AGENT_WD`,
 `AGENT_PID`, `SESSION_NAME`, `AGENT_STATE`, and `USER_STATE`. They must not inspect native hook
@@ -91,9 +99,24 @@ in `TODO.md` rather than assumed from documentation alone.
 plugin automatically when `codex` is available. Codex lifecycle hooks map session start/end,
 prompt submission, tool use, permission requests, stop, and interrupt events to normalized notify
 states. Its thin plugin wrapper lives under `release/codex/`; the adapter, state framework, and
-renderers remain shared with Claude. Start a new Codex session after installation so the hooks are
-loaded. Notify does not install a Codex skill or slash command; invoke the CLI from agent chat with
-`! notify` when shell-command execution is supported.
+renderers remain shared with Claude. The wrapper consumes Codex's stdin JSON and translates
+`session_id`, `cwd`, and `transcript_path` into normalized adapter context. It is fail-open because
+notifications are advisory: runtime output is suppressed, failures are traced, and a watchdog
+finishes before the outer Codex deadline. Start a new Codex session after installation so the hooks
+are loaded. During an upgrade, the installer preserves old Codex plugin-cache roots as symlinks to
+the live wrapper so already-open sessions do not start failing at their frozen `PLUGIN_ROOT` path.
+Notify does not install a Codex skill or slash command; invoke the CLI from agent chat with `!
+notify` when shell-command execution is supported.
+
+The Codex adapter resolves `SESSION_NAME` from the last matching `thread_name` in
+`${CODEX_HOME:-$HOME/.codex}/session_index.jsonl`. It caches the name per notify session and
+reparses only when the index's inode, size or precise modification time changes. Start/resume,
+`notify status`, and changed agent states check the name; repeated tool events that leave the
+state unchanged do not. Titles generated or renamed after startup are picked up on the next
+check. Missing/unreadable data yields no name, malformed lines are ignored, and normal TTS
+fallbacks remain available. An explicit sound-tts `name` setting still has highest priority,
+followed by the Codex session title, tmux pane title, and working-directory name. The index is a
+local Codex implementation detail, not a guaranteed hook API.
 
 ## v4 compatibility
 

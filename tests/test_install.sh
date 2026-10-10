@@ -141,6 +141,13 @@ test_plugin_registration() {
   make_fake_claude "$bin" "$claude_log" "$claude_state"
   make_fake_codex "$bin" "$codex_log" "$codex_state"
 
+  # An already-open Codex session has this old PLUGIN_ROOT frozen into its
+  # hook commands. The installer must keep that exact path usable after the
+  # plugin manager switches the installed version.
+  local old_codex_root="$home/.codex/plugins/cache/notify-local/notify/5.0.0+codex.old"
+  mkdir -p "$old_codex_root"
+  printf '%s\n' '# stale wrapper' > "$old_codex_root/notify"
+
   run() {
     HOME="$home" PATH="$bin:$PATH" NOTIFY_INSTALL_CLAUDE=true NOTIFY_INSTALL_CODEX=true \
       "$PROJECT_DIR/install.sh" >"$TEST_ROOT/plugin-install.log" 2>&1
@@ -163,6 +170,9 @@ test_plugin_registration() {
     fail "codex plugin marketplace add is called exactly once"
   [ "$(count_log_occurrences "$codex_log" "plugin add notify@notify-local")" = "1" ] || \
     fail "codex plugin add is called exactly once after the first install"
+  [ -L "$old_codex_root" ] || fail "install preserves an active Codex session's old plugin root as a symlink"
+  [ "$(readlink -f "$old_codex_root")" = "$(readlink -f "$home/opt/agent-notify/app/codex")" ] || \
+    fail "an active Codex session's old plugin root points to the live deployed wrapper"
 
   # Second install: claude's own registration is idempotent (it consults
   # `list` first), so neither call repeats.
@@ -180,7 +190,8 @@ test_plugin_registration() {
   # actual behavior.
   [ "$(count_log_occurrences "$codex_log" "plugin add notify@notify-local")" = "2" ] || \
     fail "codex plugin add is invoked again on every install, unlike claude's guarded path"
-  pass "install: claude/codex plugin registration is idempotent for claude, unguarded for codex"
+  [ -L "$old_codex_root" ] || fail "the active-session Codex compatibility link survives reinstall"
+  pass "install: plugin registration plus active Codex-session compatibility"
 }
 
 test_install_idempotency

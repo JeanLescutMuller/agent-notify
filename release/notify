@@ -15,7 +15,7 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.3"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.10"  # hardcoded; bump manually per notable change
 
 # Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
 # (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
@@ -58,6 +58,15 @@ mkdir -p "$ROOT_DATA_DIR"
 log() { local pid="$1" msg="$2"; printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$pid" "$msg" >> "$ROOT_DATA_DIR/notify.log" 2>/dev/null; }
 export -f log
 
+# One-line stdout confirmation for commands a human types (update, wipe,
+# refresh, <renderer>). SAY is switched on only by those dispatch arms, so
+# hook-driven calls (session-start, event, session-end, user-focus, init)
+# stay silent: Claude injects SessionStart hook stdout into the chat and tmux
+# run-shell pops any stdout up over the pane. NOTIFY_QUIET=true silences it
+# for scripted callers such as the tmux popup menu.
+SAY=false
+say() { $SAY && [ "${NOTIFY_QUIET:-false}" != "true" ] && printf '%s\n' "$*"; return 0; }
+
 ##### Agent adapter context #####
 # Claude Code sets CLAUDE_CODE_SESSION_ID and CLAUDE_PROJECT_DIR as plain
 # environment variables on every hook command invocation (confirmed via
@@ -77,6 +86,8 @@ load_adapter() {
   local type="$1"
   ADAPTER="$ADAPTERS_DIR/$type/main"
   [ -f "$ADAPTER" ] || { echo "Unknown agent adapter: $type" >&2; exit 1; }
+  # Optional freshness callback; reset it when switching adapters in --all.
+  adapter_refresh_session_name() { return 0; }
   source "$ADAPTER"
 }
 load_adapter "$AGENT_TYPE"
@@ -85,6 +96,13 @@ AGENT_WD="${AGENT_WD:-}"
 AGENT_PID="${AGENT_PID:-}"
 ADAPTER_TRANSCRIPT_PATH=""
 adapter_load_context
+
+# Loading saved sessions changes AGENT_* and the active adapter. Capture the
+# invocation ONCE, before a --all loop can replace it with a neighbor's data.
+INVOKING_AGENT_TYPE="$AGENT_TYPE"
+INVOKING_SESSION_ID="$AGENT_SESSION_ID"
+INVOKING_AGENT_WD="$AGENT_WD"
+INVOKING_AGENT_PID="$AGENT_PID"
 
 ##### Managed block helpers (used by `init` for the tmux hooks block) #####
 # Same box + hash + remove-then-reconstruct convention used across every
@@ -194,6 +212,22 @@ read_and_export_static() {
   AGENT_TYPE="${AGENT_TYPE:-claude}"
   load_adapter "$AGENT_TYPE"
   export SESSION_DATA_DIR SHELL_PID AGENT_TYPE AGENT_SESSION_ID AGENT_WD AGENT_PID SESSION_NAME SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION TRANSCRIPT_PATH
+}
+
+# Refresh the loaded session's name without re-resolving unrelated metadata.
+# Only adapters opting into the callback do work. Repeated identical agent
+# states skip renderer dispatch entirely, so tool hooks do not poll the index.
+refresh_session_name() {
+  local previous="$SESSION_NAME" f="$SESSION_DATA_DIR/static.env" tmp
+  adapter_refresh_session_name
+  export SESSION_NAME
+  [ "$SESSION_NAME" != "$previous" ] && [ -f "$f" ] || return 0
+  tmp="$(mktemp "$f.XXXXXX")" || return 0
+  if { sed '/^SESSION_NAME=/d' "$f" && printf 'SESSION_NAME=%q\n' "$SESSION_NAME"; } > "$tmp"; then
+    mv -f "$tmp" "$f" || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 # Persists ADAPTER_TRANSCRIPT_PATH (this invocation's adapter context) into
@@ -318,6 +352,7 @@ call_all_renderers() {
     USER_STATE)   export TRIGGER="USER_STATE_UPDATE" ;;
     *)            export TRIGGER="$2" ;;
   esac
+  [ "$TRIGGER" = "AGENT_STATE_UPDATE" ] && refresh_session_name
   export RENDER_PID ROOT_DATA_DIR SESSION_DATA_DIR
   resolve_client_tty
   resolve_renderer_settings "$RENDER_PID"
@@ -393,10 +428,10 @@ update_state_and_render() {
 cmd_refresh() {
   local RENDER_PID="$1"
   local session_dir="$ROOT_DATA_DIR/$RENDER_PID"
-  local invocation_agent_type="$AGENT_TYPE"
-  local invocation_session_id="$AGENT_SESSION_ID"
-  local invocation_agent_wd="$AGENT_WD"
-  local invocation_agent_pid="$AGENT_PID"
+  local invocation_agent_type="$INVOKING_AGENT_TYPE"
+  local invocation_session_id="$INVOKING_SESSION_ID"
+  local invocation_agent_wd="$INVOKING_AGENT_WD"
+  local invocation_agent_pid="$INVOKING_AGENT_PID"
   log "$RENDER_PID" "refresh"
 
   read_and_export_static "$RENDER_PID"
@@ -471,7 +506,7 @@ cmd_refresh() {
   echo "AGENT_SESSION_ID=$AGENT_SESSION_ID" >> "$f"
   echo "AGENT_WD=$AGENT_WD" >> "$f"
   echo "AGENT_PID=$AGENT_PID" >> "$f"
-  echo "SESSION_NAME=$SESSION_NAME" >> "$f"
+  printf 'SESSION_NAME=%q\n' "$SESSION_NAME" >> "$f"
   echo "SESSION_TMUX_PANE=$SESSION_TMUX_PANE" >> "$f"
   echo "SESSION_TMUX_WINDOW=$SESSION_TMUX_WINDOW" >> "$f"
   echo "SESSION_TMUX_SESSION=$SESSION_TMUX_SESSION" >> "$f"
@@ -495,6 +530,7 @@ cmd_status() {
   [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
 
   read_and_export_static "$RENDER_PID"
+  refresh_session_name
   read_and_export_state "$RENDER_PID"
   resolve_client_tty
 
@@ -574,6 +610,7 @@ cmd_update_state() {
     if has_pending_work "$TRANSCRIPT_PATH"; then
       touch "$ROOT_DATA_DIR/$RENDER_PID/pending_finish"
       log "$RENDER_PID" "update AGENT_STATE Finished suppressed (agent still has pending work)"
+      say "AGENT_STATE=Finished deferred: subagents still running (session $RENDER_PID)"
       return
     fi
   fi
@@ -587,9 +624,23 @@ cmd_update_state() {
     # No state change is a successful idempotent request. In particular,
     # selecting the already-active popup item must not make tmux report that
     # its run-shell command failed.
-    [ "$result" -eq 1 ] && return 0
+    [ "$result" -eq 1 ] && { say "$CMD_ARG1 already $CMD_ARG2 (session $RENDER_PID)"; return 0; }
     return "$result"
   }
+  say "$CMD_ARG1=$CMD_ARG2 (session $RENDER_PID)"
+}
+
+# Human-facing wrappers: cmd_refresh/cmd_wipe also run from hooks and from
+# other commands, so their confirmation lives here rather than inside them.
+user_refresh() {
+  cmd_refresh "$1"
+  if [ -d "$ROOT_DATA_DIR/$1" ]; then say "refreshed (session $1)"
+  else say "pruned dead session $1"; fi
+}
+
+user_wipe() {
+  if [ -d "$ROOT_DATA_DIR/$1" ]; then cmd_wipe "$1"; say "wiped (session $1)"
+  else say "nothing to wipe (session $1)"; fi
 }
 
 cmd_wipe() {
@@ -645,8 +696,10 @@ cmd_settings() {
     off|disable) local action="enabled=false" ;;
     *)           local action="$CMD_ARG1" ;;
   esac
+  local changed=()
   for kv in "$action" "$CMD_ARG2" "${CMD_EXTRA_ARGS[@]}"; do
     [[ "$kv" == *=* ]] || continue
+    changed+=("$kv")
     local k="${kv%%=*}" v="${kv#*=}"
     if echo "$v" | grep -qE '^[0-9]+$|^true$|^false$'; then
       jq --arg k "$k" --argjson v "$v" '.[$k] = $v' "$target" > "$target.tmp" && mv "$target.tmp" "$target"
@@ -655,6 +708,13 @@ cmd_settings() {
     fi
     log "${RENDER_PID:--}" "settings $renderer.$k=$v"
   done
+  if [ "${#changed[@]}" -eq 0 ]; then
+    say "$renderer: nothing changed (expected enable, disable or key=value)"
+  elif [ -n "$RENDER_PID" ]; then
+    say "$renderer: ${changed[*]} (session $RENDER_PID)"
+  else
+    say "$renderer: ${changed[*]} (global, all sessions)"
+  fi
 
   # Refresh render (if not a change of the global settings)
   if [ -n "$RENDER_PID" ]; then
@@ -780,11 +840,12 @@ case "$CMD" in
     CMD_ARG1="AGENT_STATE"
     resolve_and_run cmd_update_state
     ;;
-  wipe)      resolve_and_run cmd_wipe ;;
-  update)    resolve_and_run cmd_update_state ;;
-  refresh)   resolve_and_run cmd_refresh ;;
+  wipe)      SAY=true; resolve_and_run user_wipe ;;
+  update)    SAY=true; resolve_and_run cmd_update_state ;;
+  refresh)   SAY=true; resolve_and_run user_refresh ;;
   *)
     # Anything else is assumed to be a renderer name, e.g. `notify sound-tts enable`.
+    SAY=true
     if $GLOBAL; then cmd_settings "_global"
     else resolve_and_run cmd_settings; fi ;;
 esac
@@ -806,5 +867,9 @@ for _d in "$ROOT_DATA_DIR"/[0-9]*/; do
 done
 if [ $((_now_epoch - _last_refresh)) -ge $_refresh_interval ]; then
   echo "$_now_epoch" > "$_last_refresh_file"
-  bash "$0" refresh --all &
+  # Detached from the hook's stdio so a hook runner waiting for pipe EOF
+  # (Codex) does not wait on, or time out over, this background refresh.
+  # Keep the original caller/PID snapshot. Starting a fresh CLI here would
+  # re-import AGENT_* exported while rendering the last visited session.
+  (ALL=true; SAY=false; resolve_and_run cmd_refresh) </dev/null >/dev/null 2>&1 &
 fi
