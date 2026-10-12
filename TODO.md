@@ -62,10 +62,10 @@ cancel the stale marker.
 
 ### Runtime `.env` files are sourced as shell
 
-`static.env` and `state.env` are shell assignments that are later sourced. `SESSION_NAME` is now
-escaped with `printf %q` (v5.8), but other fields remain unquoted. Spaces in those fields can fail
-to load, and shell syntax in working directories, tmux names, or manually supplied state values
-can execute code when the file is read.
+`static.env` and `state.env` are shell assignments that are later sourced. Every `static.env`
+value is now escaped with `printf %q` (v5.11, after the tmux session "WhatsApp skill" loaded as
+empty and froze the title icon on events). `state.env` values stay unquoted, and manually supplied
+state values with shell syntax can still execute code when the file is read.
 
 This should use JSON or safely escaped assignments before the project accepts untrusted adapters
 or is installed for other users. It is intentionally not being fixed while this remains a trusted,

@@ -93,11 +93,11 @@ manifest or hook-command change.
 
 ### Accepted trust boundary
 
-`static.env` and `state.env` are shell assignments that are later sourced. `SESSION_NAME` is
-escaped with Bash `printf %q`; other metadata remains unquoted. Spaces in those other fields can
-break parsing and shell syntax can execute. This is deliberately accepted while the project is
-single-user and all adapters are trusted. Do not expose it to untrusted metadata without replacing
-the files with JSON or safe serialization. The issue is tracked in `TODO.md`.
+`static.env` and `state.env` are shell assignments that are later sourced. Every `static.env`
+value is escaped with Bash `printf %q` (v5.11; before that, a tmux session name with a space loaded
+as empty). `state.env` holds unquoted enum values. Sourcing is still deliberately accepted while
+the project is single-user and all adapters are trusted. Do not expose it to untrusted metadata
+without replacing the files with JSON or safe serialization. The issue is tracked in `TODO.md`.
 
 ## Lifecycle and commands
 

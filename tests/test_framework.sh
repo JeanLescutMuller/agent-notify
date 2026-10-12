@@ -139,7 +139,7 @@ test_refresh_all_isolation() {
   date '+%s' > "$root/.last_refresh"
   printf '%s\n' \
     "SHELL_PID=$first" "AGENT_TYPE=codex" "AGENT_SESSION_ID=codex-one" \
-    "AGENT_WD=/tmp/codex-one" "AGENT_PID=101" "SESSION_NAME=codex-one-name" \
+    'AGENT_WD=/tmp/codex\ one' "AGENT_PID=101" "SESSION_NAME=codex-one-name" \
     "SESSION_TMUX_PANE=" "SESSION_TMUX_WINDOW=" "SESSION_TMUX_SESSION=" \
     "TRANSCRIPT_PATH=/tmp/codex-one.jsonl" > "$root/$first/static.env"
   printf '%s\n' \
@@ -165,6 +165,10 @@ test_refresh_all_isolation() {
   assert_file_contains "$root/$first/static.env" "SESSION_NAME=codex-one-name" "refresh-all preserves first SESSION_NAME"
   assert_file_contains "$root/$second/static.env" "AGENT_PID=202" "refresh-all preserves second AGENT_PID"
   assert_file_contains "$root/$second/static.env" "SESSION_NAME=claude-two-name" "refresh-all preserves second SESSION_NAME"
+  # A value with a space (e.g. tmux session "WhatsApp skill") must load back
+  # intact when static.env is sourced, not as empty plus a stray command.
+  [ "$(bash -c 'source "$1" 2>&1; printf %s "$AGENT_WD"' _ "$root/$first/static.env")" = "/tmp/codex one" ] \
+    || fail "static.env value with a space survives write and source"
 
   # The invoker must itself be in the sweep, AFTER another session. Otherwise
   # loading a neighbor never exercises the current-session metadata branch.

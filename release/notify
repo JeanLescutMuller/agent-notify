@@ -15,7 +15,7 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.10"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.11"  # hardcoded; bump manually per notable change
 
 # Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
 # (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
@@ -239,8 +239,10 @@ refresh_session_name() {
 persist_transcript_path() {
   local RENDER_PID="$1" f="$ROOT_DATA_DIR/$RENDER_PID/static.env"
   [ -n "$ADAPTER_TRANSCRIPT_PATH" ] && [ -f "$f" ] || return 0
-  grep -qxF "TRANSCRIPT_PATH=$ADAPTER_TRANSCRIPT_PATH" "$f" 2>/dev/null && return 0
-  { grep -v '^TRANSCRIPT_PATH=' "$f" 2>/dev/null; echo "TRANSCRIPT_PATH=$ADAPTER_TRANSCRIPT_PATH"; } > "$f.tmp" && mv "$f.tmp" "$f"
+  local line
+  printf -v line 'TRANSCRIPT_PATH=%q' "$ADAPTER_TRANSCRIPT_PATH"
+  grep -qxF "$line" "$f" 2>/dev/null && return 0
+  { grep -v '^TRANSCRIPT_PATH=' "$f" 2>/dev/null; echo "$line"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # Detects subagents dispatched (via the Agent tool) by RENDER_PID's own
@@ -500,17 +502,21 @@ cmd_refresh() {
   fi
   mkdir -p "$session_dir"
   f="$session_dir/static.env"
-  echo "TIMESTAMP=$(date '+%Y-%m-%dT%H:%M:%S')" > "$f"
-  echo "SHELL_PID=$RENDER_PID" >> "$f"
-  echo "AGENT_TYPE=$AGENT_TYPE" >> "$f"
-  echo "AGENT_SESSION_ID=$AGENT_SESSION_ID" >> "$f"
-  echo "AGENT_WD=$AGENT_WD" >> "$f"
-  echo "AGENT_PID=$AGENT_PID" >> "$f"
-  printf 'SESSION_NAME=%q\n' "$SESSION_NAME" >> "$f"
-  echo "SESSION_TMUX_PANE=$SESSION_TMUX_PANE" >> "$f"
-  echo "SESSION_TMUX_WINDOW=$SESSION_TMUX_WINDOW" >> "$f"
-  echo "SESSION_TMUX_SESSION=$SESSION_TMUX_SESSION" >> "$f"
-  echo "TRANSCRIPT_PATH=$TRANSCRIPT_PATH" >> "$f"
+  # Every value is %q-escaped: the file is sourced, and a tmux session name
+  # with a space ("WhatsApp skill") used to load as empty.
+  {
+    printf 'TIMESTAMP=%q\n' "$(date '+%Y-%m-%dT%H:%M:%S')"
+    printf 'SHELL_PID=%q\n' "$RENDER_PID"
+    printf 'AGENT_TYPE=%q\n' "$AGENT_TYPE"
+    printf 'AGENT_SESSION_ID=%q\n' "$AGENT_SESSION_ID"
+    printf 'AGENT_WD=%q\n' "$AGENT_WD"
+    printf 'AGENT_PID=%q\n' "$AGENT_PID"
+    printf 'SESSION_NAME=%q\n' "$SESSION_NAME"
+    printf 'SESSION_TMUX_PANE=%q\n' "$SESSION_TMUX_PANE"
+    printf 'SESSION_TMUX_WINDOW=%q\n' "$SESSION_TMUX_WINDOW"
+    printf 'SESSION_TMUX_SESSION=%q\n' "$SESSION_TMUX_SESSION"
+    printf 'TRANSCRIPT_PATH=%q\n' "$TRANSCRIPT_PATH"
+  } > "$f"
 
   # 5. Refresh Renderers. Raw (possibly empty) state, deliberately not defaulted -
   # see AGENT_STATE_DEFAULT's comment: this is the automatic path, and a fresh
