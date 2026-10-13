@@ -71,7 +71,7 @@ test_codex_hooks_manifest() {
   bad_timeouts=$(printf '%s\n' "$timeouts" | awk '$1 < 1 || $1 > 3' || true)
   [ -z "$bad_timeouts" ] || fail "every codex hook timeout should stay within the trust-stable 1-3s bound (found: $bad_timeouts)"
 
-  # TODO.md ("Distinguish auto-approved Codex permission requests from real
+  # HISTORY.md ("Distinguish auto-approved Codex permission requests from real
   # waits", resolved 2026-09-03): PostToolUse must map to `event Working` -
   # it's what clears a WaitingForUser the instant an auto-approved tool
   # actually finishes, instead of leaving it rendered until some unrelated
@@ -81,7 +81,7 @@ test_codex_hooks_manifest() {
   # scenario exercises the same `notify event` calls this hook fires but
   # never touches hooks.json itself.
   jq -e '.hooks.PostToolUse[0].hooks[0].command | test(" event Working$")' "$CODEX_HOOKS" >/dev/null || \
-    fail "codex hooks.json PostToolUse must map to 'event Working' (see TODO.md's resolved auto-review flap entry)"
+    fail "codex hooks.json PostToolUse must map to 'event Working' (see HISTORY.md's resolved auto-review flap entry)"
 
   pass "codex hooks.json: valid, always tags NOTIFY_AGENT_TYPE=codex, sane timeouts, matches TESTING.md's event table, PostToolUse resolves Working"
 }

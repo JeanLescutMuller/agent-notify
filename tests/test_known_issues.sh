@@ -1,5 +1,5 @@
 #!/bin/bash
-# Opt-in scenarios documenting currently-accepted bugs/risk from TODO.md and
+# Opt-in scenarios documenting currently-accepted bugs/risk from Todoist (Repo: agent-notify) and
 # CLAUDE.md (tests/AGENTS.md scenarios 15-16). These are tripwires, not
 # correctness assertions: scenario 16 is deterministic and safe to run
 # anytime; scenario 15 demonstrates a real, currently-unfixed race and is
@@ -19,7 +19,7 @@ TEST_ROOT="$(mktemp -d /tmp/notify-tests.XXXXXX)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 test_concurrent_update_race() {
-  # TODO.md ("Serialize overlapping state updates"): update_state_and_render
+  # Todoist (Repo: agent-notify) ("Serialize overlapping state updates"): update_state_and_render
   # does an unlocked read/modify/write/render sequence, so concurrent hook
   # commands can read the same old state and overwrite each other's
   # state.env. This burns many bursts of truly concurrent conflicting
@@ -62,7 +62,7 @@ test_concurrent_update_race() {
   done
 
   if [ "$reproduced" -eq 1 ]; then
-    echo "REPRODUCED: concurrent updates corrupted state.env (TODO.md's unlocked read/modify/write race)"
+    echo "REPRODUCED: concurrent updates corrupted state.env (the Todoist task unlocked read/modify/write race)"
   else
     echo "NOT REPRODUCED this run: state.env stayed well-formed across $burst_count bursts of $concurrency concurrent updates"
   fi
@@ -74,7 +74,7 @@ test_trust_boundary_shell_injection() {
   # shell assignments that get sourced later, so shell syntax in adapter
   # metadata executes. This is a tripwire, not a bug to fix here - if
   # someone quietly makes the sourcing safe without updating CLAUDE.md/
-  # TODO.md, this test starts failing and flags the drift.
+  # Todoist (Repo: agent-notify), this test starts failing and flags the drift.
   local root="$TEST_ROOT/trust" render_pid=95002 marker="$TEST_ROOT/pwned"
   mkdir -p "$root"
   date '+%s' > "$root/.last_refresh"

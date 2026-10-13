@@ -34,7 +34,8 @@ agent-notify/
 ├── README.md
 ├── INTEGRATIONS.md
 ├── TESTING.md
-└── TODO.md
+├── HISTORY.md
+└── viewer.html
 ```
 
 Each renderer directory owns its executable, immutable default `settings.json`, and optional
@@ -97,7 +98,7 @@ manifest or hook-command change.
 value is escaped with Bash `printf %q` (v5.11; before that, a tmux session name with a space loaded
 as empty). `state.env` holds unquoted enum values. Sourcing is still deliberately accepted while
 the project is single-user and all adapters are trusted. Do not expose it to untrusted metadata
-without replacing the files with JSON or safe serialization. The issue is tracked in `TODO.md`.
+without replacing the files with JSON or safe serialization. The issue is tracked in Todoist (`Repo: agent-notify`).
 
 ## Lifecycle and commands
 
@@ -145,7 +146,7 @@ agent chat that supports direct shell commands, invoke it as `! notify`. If the 
 - Automatic focus updates do not clear `OnHold`; deliberate `update USER_STATE` commands can.
 
 State transitions are currently not locked across concurrent processes. Do not describe them as
-race-free; the open hook overlap and writer lock work is in `TODO.md`.
+race-free; the open hook overlap and writer lock work is in Todoist (`Repo: agent-notify`).
 
 ## PID and TTY resolution
 
@@ -170,7 +171,7 @@ remains and represented by `pending_finish`; later updates or debounced `refresh
 
 This reflects behavior verified during the 2026-08-27 investigation. Newer Claude documentation
 advertises stdin context and native `SubagentStart`/`SubagentStop`; validate that against the
-deployed CLI before replacing the working fallback. See `TODO.md` and `TESTING.md`.
+deployed CLI before replacing the working fallback. See Todoist (`Repo: agent-notify`) and `TESTING.md`.
 
 ## Renderer settings
 

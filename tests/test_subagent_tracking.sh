@@ -62,7 +62,7 @@ test_t1_single_subagent() {
   # The dispatched agent completes. Resolution happens reactively: the very
   # next hook event (here, an unrelated Idle) first resolves the suppressed
   # Finished, THEN applies its own request - locking down the documented,
-  # currently-undecided ordering from TODO.md ("Decide how new activity
+  # currently-undecided ordering from Todoist (Repo: agent-notify) ("Decide how new activity
   # supersedes a pending finish") as today's actual behavior.
   completed_line "aaaaaaaaaaaa" >> "$TRANSCRIPT"
   run_claude "$root" "$render_pid" event Idle
@@ -159,7 +159,7 @@ test_orphaned_subagent_never_resolves() {
   [ -f "$root/$render_pid/pending_finish" ] || fail "orphan pending_finish marker created"
 
   # No completion entry is ever added (the historical orphaned-background-tool
-  # case from TODO.md's "external issue" section). Repeated refreshes must
+  # case from the Todoist task "external issue" section). Repeated refreshes must
   # leave the marker in place forever - this is documented, accepted
   # behavior, not a bug this test is trying to fix.
   local i

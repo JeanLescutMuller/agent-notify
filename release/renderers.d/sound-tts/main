@@ -68,7 +68,7 @@ case "$TRIGGER" in
     # WaitingForUser is debounced: some agents (Codex's PermissionRequest,
     # under an auto-approval policy) fire it even when nothing ever actually
     # waits on a human, and there's no hook-payload signal to tell the two
-    # cases apart (see TODO.md). Wait a beat and re-check disk state right
+    # cases apart (see HISTORY.md). Wait a beat and re-check disk state right
     # before speaking, so a fast auto-approval never speaks at all.
     # (debounce only looked up for WaitingForUser - no point paying for a jq
     # call on every other state transition, which is the common case.)

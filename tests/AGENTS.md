@@ -26,7 +26,7 @@ scenario-specific enough that a shared abstraction wasn't worth it.
 Tags: **[done]** implemented and passing. **[fixture]** scripted against a hand-built `.jsonl`
 transcript standing in for a real Claude session — this is what makes T1–T3/T5 automatable at all.
 **[stub]** needs a fake `tmux`/`claude`/`codex` binary on `PATH`. **[opt-in]** documents a
-currently-accepted bug or risk from `TODO.md`; kept out of the default pass/fail suite since it's
+currently-accepted bug or risk from Todoist (`Repo: agent-notify`); kept out of the default pass/fail suite since it's
 inherently racy or intentionally-not-fixed, gated behind `RUN_KNOWN_ISSUES=1`.
 
 ---
@@ -80,7 +80,7 @@ One fixture transcript with a dispatched `agentId` and no completion entry yet �
 suppressed, `pending_finish` marker created. Append a completion entry to the same fixture and
 fire the next hook event (a plain `event Idle`) → marker resolves reactively, `Finished` renders
 first, then the new `Idle` request still applies — locking down the currently-undecided ordering
-from `TODO.md`'s "Decide how new activity supersedes a pending finish" as today's actual behavior,
+from Todoist (`Repo: agent-notify`)'s "Decide how new activity supersedes a pending finish" as today's actual behavior,
 not a claim it's correct. Automates `TESTING.md`'s T1 without a live Claude session.
 
 ### 6. [fixture, done] Parallel subagents (T2 shape)
@@ -102,7 +102,7 @@ resolution path.
 
 A fixture that never gains a completion entry. Runs several `refresh`es and asserts
 `pending_finish` is still present and no `Finished` ever fires — this is *documented, accepted*
-behavior (an orphan is supposed to stay pending forever, per `TODO.md`), not a bug to assert away.
+behavior (an orphan is supposed to stay pending forever, per Todoist (`Repo: agent-notify`)), not a bug to assert away.
 Deterministic (nothing about it is racy), so it runs in the default suite rather than the opt-in
 `test_known_issues.sh` file — a good tripwire if pending-finish ever grows a timeout later.
 
@@ -169,7 +169,7 @@ T4/TODO overlap, asserted as a tripwire for either direction of drift, not a cla
 Plus: the Codex plugin manifest is valid with the `+codex.<timestamp>` version suffix, and every
 Codex hook command carries `NOTIFY_AGENT_TYPE=codex`, stays within 1–3s, and has hook-event coverage
 matching `TESTING.md`'s mapping table exactly — including that `PostToolUse` specifically maps to
-`event Working`, per `TODO.md`'s resolved "Distinguish auto-approved Codex permission requests from
+`event Working`, per `HISTORY.md`'s resolved "Distinguish auto-approved Codex permission requests from
 real waits": that's what clears a `WaitingForUser` the instant an auto-approved tool actually
 finishes, instead of leaving it rendered until some later unrelated `PreToolUse` (observed lingering
 for minutes in production on 2026-08-31/09-01). This manifest assertion is the only thing that would
@@ -182,7 +182,7 @@ Working→WaitingForUser→Finished walk).
 25 bursts of 12 truly concurrent `notify update AGENT_STATE Working|Finished` calls against the
 same render PID, checking `state.env` for structural corruption (wrong line count, duplicate
 `AGENT_STATE=`/`USER_STATE=` keys) after each burst — the actual observable symptom of two
-processes' separate `>`/`>>` write sequences interleaving, per `TODO.md`'s "Serialize overlapping
+processes' separate `>`/`>>` write sequences interleaving, per Todoist (`Repo: agent-notify`)'s "Serialize overlapping
 state updates". Reproducing a real race black-box (without instrumenting the script to force an
 exact interleaving) is inherently probabilistic, so this scenario never fails the suite by itself —
 it prints whether it reproduced the race this run and always passes structurally. Skipped by
@@ -192,7 +192,7 @@ default; run explicitly with `RUN_KNOWN_ISSUES=1`.
 
 A working-directory value containing a literal `$(touch marker)` payload, passed through
 `NOTIFY_AGENT_WD`, written verbatim into `static.env`, and only executed once something re-sources
-that file (`notify status`) — proving the accepted risk in CLAUDE.md/TODO.md ("Runtime `.env`
+that file (`notify status`) — proving the accepted risk in CLAUDE.md/Todoist ("Runtime `.env`
 files are sourced as shell") is still exactly as documented. Deterministic, not flaky; grouped into
 the opt-in file alongside scenario 15 because both document accepted risk rather than assert
 correctness, not because this one is racy.

@@ -1,6 +1,6 @@
 #!/bin/bash
 # End-to-end scenario for the WaitingForUser debounce in sound-bell/sound-tts
-# (tests/AGENTS.md: see also the 2026-09-16 investigation in TODO.md - Codex's
+# (tests/AGENTS.md: see also the 2026-09-16 investigation in HISTORY.md - Codex's
 # PermissionRequest hook fires WaitingForUser even when auto-approved within
 # seconds, with no payload signal to tell that apart from a real wait). The
 # debounce lives entirely inside the two sound renderers, not the core: a

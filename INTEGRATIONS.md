@@ -51,7 +51,7 @@ Variables:
 | `NOTIFY_CONFIG_DIR` | Test/advanced override for persistent configuration root |
 
 Metadata currently enters trusted shell-backed runtime files. Do not pass untrusted values; see
-the accepted limitation in `TODO.md`.
+the accepted limitation in Todoist (`Repo: agent-notify`).
 
 ## Native adapter contract
 
@@ -91,7 +91,7 @@ directory is a symlink to the shared runtime; Claude-specific parsing remains un
 The current adapter uses Claude environment variables and a bounded transcript scan for dispatched
 subagent completion. Current [Claude hook documentation](https://code.claude.com/docs/en/hooks)
 describes stdin JSON and native subagent lifecycle hooks; validating and adopting those is tracked
-in `TODO.md` rather than assumed from documentation alone.
+in Todoist (`Repo: agent-notify`) rather than assumed from documentation alone.
 
 ## Codex integration
 

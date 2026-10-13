@@ -247,14 +247,14 @@ persist_transcript_path() {
 
 # Detects subagents dispatched (via the Agent tool) by RENDER_PID's own
 # session that haven't completed yet, per that session's own transcript.
-# See TODO.md ("Subagent completion tracking") for the full investigation -
+# See HISTORY.md ("Subagent completion tracking") for the full investigation -
 # short version: a dispatched agent's tool_result always contains a literal
 # "agentId: <hex>" line; the moment that agent's underlying task actually
 # completes (whether or not the parent has looked at it yet), Claude Code
 # itself appends a {"type":"queue-operation","operation":"enqueue",...,
 # "content":"...<task-id><hex></task-id>...<status>completed</status>..."}
 # entry to the SAME transcript - authoritative, low-latency, and unlike a
-# subagent's own hooks (which never fire on completion - see TODO.md), this
+# subagent's own hooks (which never fire on completion - see HISTORY.md), this
 # is written reliably because the parent's own transcript is what's doing
 # the writing. Bounded to a tail window of the transcript for speed (the
 # Stop hook's own timeout is 2s in plugin.json) - a subagent dispatched
@@ -267,7 +267,7 @@ has_pending_work() { adapter_has_pending_work "$1"; }
 # subagents have since cleared, applies it now and clears the marker. Called
 # both reactively (start of cmd_update_state, so the session's own next hook
 # event resolves it) and proactively (end of cmd_refresh, so it resolves even
-# if the session stays completely silent - see TODO.md, this is what makes
+# if the session stays completely silent - see HISTORY.md, this is what makes
 # the fix work for the T6/T8/T10-style "parent goes idle" case).
 try_resolve_pending_finish() {
   local RENDER_PID="$1" session_dir="$ROOT_DATA_DIR/$1"
@@ -608,7 +608,7 @@ cmd_update_state() {
 
   # Don't let Stop's "the main turn ended" get reported as Finished while this
   # session has dispatched subagents (fork or otherwise) that haven't
-  # completed yet, per its own transcript - see TODO.md ("Subagent completion
+  # completed yet, per its own transcript - see HISTORY.md ("Subagent completion
   # tracking") for the full writeup. Suppress the transition and remember to
   # retry via try_resolve_pending_finish instead of reporting done-when-not.
   if [ "$CMD_ARG1" = "AGENT_STATE" ] && [ "$CMD_ARG2" = "Finished" ]; then

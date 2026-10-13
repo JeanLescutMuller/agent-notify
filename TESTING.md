@@ -24,14 +24,14 @@ branch-by-branch unit-test decomposition — see `tests/AGENTS.md` for the full 
 | `test_subagent_tracking.sh` | Fixture-transcript automation of the live T1/T2/T3/T5 scenarios below: single dispatched subagent, three parallel/staggered subagents, silent background completion resolved via `refresh` alone, and an orphaned subagent whose `pending_finish` marker never expires |
 | `test_tmux_focus.sh` | `user-focus` pane switching: focused pane → `Acknowledged`, other known panes → `Seen`, a plain shell pane untouched, `OnHold`/`Acknowledged` immune to the automatic path, empty `$TMUX_PANE` is a no-op |
 | `test_renderer_settings.sh` | The real three-file settings merge (default < global < session) reaching actual renderer dispatch, and a session-scoped `enabled=false` overriding a default-enabled renderer |
-| `test_waiting_debounce.sh` | `sound-bell`/`sound-tts`'s `waiting_debounce_secs` (see TODO.md's 2026-09-16 resolved entry): a `WaitingForUser` cleared within the window never rings/speaks, one that outlives it still does, `state.env`/other renderers update immediately regardless, `waiting_debounce_secs=0` stays fully synchronous, and background work never holds a piped hook's stdout/stderr (Codex `Hook failed`, TODO.md 2026-10-06) |
+| `test_waiting_debounce.sh` | `sound-bell`/`sound-tts`'s `waiting_debounce_secs` (see HISTORY.md's 2026-09-16 resolved entry): a `WaitingForUser` cleared within the window never rings/speaks, one that outlives it still does, `state.env`/other renderers update immediately regardless, `waiting_debounce_secs=0` stays fully synchronous, and background work never holds a piped hook's stdout/stderr (Codex `Hook failed`, HISTORY.md 2026-10-06) |
 | `test_codex_hook_wrapper.sh` | Codex stdin JSON → normalized adapter context; runtime stdout/stderr suppression; non-zero runtime failures becoming traced, fail-open hook success; a stuck runtime being cut off before Codex's outer deadline |
 | `test_codex_session_name.sh` | Codex title index → escaped metadata → actual TTS output; explicit-name priority; unchanged-index cache hits; rapid renames and late-generated titles; missing/malformed data; pane reuse and target-session identity |
 | `test_cli_confirmations.sh` | One-line stdout confirmation from `update` (changed/unchanged), `wipe`, `refresh` and renderer settings (session/global scope, no-op); silence of `session-start`/`event`/`session-end`/`init` and of `NOTIFY_QUIET=true` callers |
 | `test_notify_init.sh` | The managed tmux-hooks block lifecycle: `CLAUDE-NOTIFY`→`AGENT-NOTIFY` label migration, fresh deploy, idempotent redeploy, a real content change producing exactly one backup, and a hand-edited block being refused rather than clobbered |
 | `test_install.sh` | Fresh install / idempotent reinstall / preserved `config/` / clean `app/` replacement; old-plugin-dir settings migration (migrated once, never re-migrated or clobbered); Claude/Codex plugin registration; compatibility links keeping already-open Codex sessions on the live wrapper |
 | `test_manifests.sh` | Static `jq`/grep checks on both plugin manifests: absolute hook paths, event-appropriate timeouts, the documented `AskUserQuestion`/catch-all `PreToolUse` overlap, `NOTIFY_AGENT_TYPE=codex` always present, hook-event coverage matching this file's own mapping table |
-| `test_known_issues.sh` | Opt-in (`RUN_KNOWN_ISSUES=1`) tripwires for two currently-accepted `TODO.md`/CLAUDE.md risks: the unlocked concurrent state-update race (informational — reproducing a real race black-box is probabilistic, so it never fails the suite by itself) and the shell-metadata trust boundary (deterministic) |
+| `test_known_issues.sh` | Opt-in (`RUN_KNOWN_ISSUES=1`) tripwires for two currently-accepted Todoist (`Repo: agent-notify`)/CLAUDE.md risks: the unlocked concurrent state-update race (informational — reproducing a real race black-box is probabilistic, so it never fails the suite by itself) and the shell-metadata trust boundary (deterministic) |
 
 These suites call the adapters directly (or through fixture transcripts standing in for a real
 Claude session) with representative native context. They deliberately do not pretend to test
@@ -107,7 +107,7 @@ Separately, `sound-bell`/`sound-tts` hold `WaitingForUser` for `waiting_debounce
 8s) before actually ringing/speaking, re-checking `state.env` first - so during a live check, an
 auto-approved permission request may show `WaitingForUser` in `notify status`/the tmux pane color
 for a moment with no sound at all, while a real wait still alerts after the short delay. See
-TODO.md's 2026-09-16 resolved entry and `tests/test_waiting_debounce.sh`.
+HISTORY.md's 2026-09-16 resolved entry and `tests/test_waiting_debounce.sh`.
 
 After `Finished`, run the tmux menu acknowledgement (`Ctrl-B`, then `A`). `USER_STATE` should become
 `Acknowledged`, and the command must not print `No active session found`.
@@ -237,7 +237,7 @@ Record the result when changing the plugin manifest; the eventual fix should emi
 ### T5 — long/orphaned background tool
 
 The historical 90-second background Bash scenario once left the Claude subagent without a final
-completion signal. Repeat only when investigating the external orphan issue in `TODO.md`; an orphan
+completion signal. Repeat only when investigating the external orphan issue in Todoist (`Repo: agent-notify`); an orphan
 will intentionally leave `pending_finish` unresolved.
 
 ## Manual renderer checks
