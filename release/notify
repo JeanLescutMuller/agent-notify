@@ -107,7 +107,7 @@ INVOKING_AGENT_PID="$AGENT_PID"
 ##### Managed block helpers (used by `init` for the tmux hooks block) #####
 # Same box + hash + remove-then-reconstruct convention used across every
 # project that injects a block into a config file it doesn't fully own -
-# see also bootstrap-home's bootstrap.sh, which shares this exact format.
+# see also my-setup's bootstrap.sh, which shares this exact format.
 
 _sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'
