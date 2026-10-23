@@ -98,5 +98,5 @@ environment variables; agent-native parsing belongs in `adapters.d/`.
 - Claude's subagent completion handling currently uses a bounded transcript scan pending validation
   of newer documented lifecycle hooks.
 
-Planned work: Todoist, tasks with `Repo: agent-notify` ([viewer.html](viewer.html)); resolved issues and their rationale: [HISTORY.md](HISTORY.md), and [TESTING.md](TESTING.md) for regression
+Planned work: Todoist, tasks with `Repo: agent-notify` ([todo.html](todo.html)); resolved issues and their rationale: [HISTORY.md](HISTORY.md), and [TESTING.md](TESTING.md) for regression
 checks.

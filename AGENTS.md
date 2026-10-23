@@ -35,7 +35,7 @@ agent-notify/
 ├── INTEGRATIONS.md
 ├── TESTING.md
 ├── HISTORY.md
-└── viewer.html
+└── todo.html
 ```
 
 Each renderer directory owns its executable, immutable default `settings.json`, and optional
