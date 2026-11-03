@@ -15,7 +15,7 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.12"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.13"  # hardcoded; bump manually per notable change
 
 # Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
 # (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
@@ -56,6 +56,27 @@ mkdir -p "$ROOT_DATA_DIR"
 # own rlog() just calls this with its name as part of the message prefix,
 # instead of reimplementing the timestamp/printf/redirect logic itself.
 log() { local pid="$1" msg="$2"; printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$pid" "$msg" >> "$ROOT_DATA_DIR/notify.log" 2>/dev/null; }
+
+# Caps notify.log at NOTIFY_LOG_MAX_BYTES (default 100 MB, the user, 2026-11-03;
+# it grew 86 MB in 18 days, ~5 MB/day, and was never trimmed). Over the cap it
+# keeps the newest half, cut at a line start, so trims are rare (~10 days apart).
+# Runs only inside the detached debounced refresh (at most every 300 s), never
+# on a hook's critical path. A line appended by another notify call during the
+# few hundred ms of a trim can be lost; accepted.
+trim_log() {
+  local f="$ROOT_DATA_DIR/notify.log" max="${NOTIFY_LOG_MAX_BYTES:-104857600}" size tmp
+  case "$OSTYPE" in
+    darwin*) size="$(stat -f %z "$f" 2>/dev/null)" ;;
+    *)       size="$(stat -c %s "$f" 2>/dev/null)" ;;
+  esac
+  [[ "$size" =~ ^[0-9]+$ ]] && [[ "$max" =~ ^[0-9]+$ ]] && [ "$size" -gt "$max" ] || return 0
+  tmp="$f.trim.$$"
+  if tail -c "$((max / 2))" "$f" 2>/dev/null | tail -n +2 > "$tmp" && mv -f "$tmp" "$f"; then
+    log "-" "notify.log trimmed: was $size bytes (cap $max), kept the newest half"
+  else
+    rm -f "$tmp"
+  fi
+}
 export -f log
 
 # One-line stdout confirmation for commands a human types (update, wipe,
@@ -817,5 +838,5 @@ if [ $((_now_epoch - _last_refresh)) -ge $_refresh_interval ]; then
   # (Codex) does not wait on, or time out over, this background refresh.
   # Keep the original caller/PID snapshot. Starting a fresh CLI here would
   # re-import AGENT_* exported while rendering the last visited session.
-  (ALL=true; SAY=false; resolve_and_run cmd_refresh) </dev/null >/dev/null 2>&1 &
+  (trim_log; ALL=true; SAY=false; resolve_and_run cmd_refresh) </dev/null >/dev/null 2>&1 &
 fi

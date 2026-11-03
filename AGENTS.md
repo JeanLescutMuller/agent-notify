@@ -79,7 +79,7 @@ manifest or hook-command change.
 
 ```text
 /tmp/agent-notify-$USER/
-├── notify.log
+├── notify.log                      # capped at 100 MB: keeps the newest half (trim_log, v5.13)
 ├── .last_refresh
 └── <shell-pid>/
     ├── static.env

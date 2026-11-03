@@ -4,7 +4,7 @@ End-to-end scenarios in `tests/`, not a unit-test decomposition of every branch.
 is one test *scenario* — a realistic sequence of calls against `release/notify` (or `install.sh`)
 that bundles several related assertions along the way, the same shape `test_framework.sh`'s
 original `test_lifecycle`/`test_popup_targeting`/`test_refresh_all_isolation`/`test_renderers`
-already used. All 18 scenarios below are implemented; this file stays as the map explaining what
+already used. All 19 scenarios below are implemented; this file stays as the map explaining what
 each one covers and why, for whoever touches these tests next.
 
 ## Why scenarios, not unit tests
@@ -211,6 +211,15 @@ the iTerm2 TTS sequence. The scenario checks escaping and source priority, cache
 same-second renames, missing/malformed records, titles generated after startup, and reused panes.
 The target session's saved identity must win over an unrelated invoker's session id.
 
+### 19. [done] `notify.log` size cap — `tests/test_log_cap.sh`
+
+`trim_log` runs in the detached debounced refresh: over `NOTIFY_LOG_MAX_BYTES` (default 100 MB) it
+keeps the newest half, cut at a line start. Scenarios: over the cap (newest line kept, oldest gone,
+no cut line, one `notify.log trimmed` line, no temp file left); under the cap (old content
+byte-identical); not due (no trim between refreshes); a non-numeric cap and a missing log (no trim,
+no error); and the real default on a 106 MB file (trimmed to ~50 MB while the hook call returns
+within 1 s). Exactly at the cap is not testable end to end: the hook call appends lines first.
+
 ---
 
 ## File layout
@@ -228,6 +237,7 @@ The target session's saved identity must win over an unrelated invoker's session
 - `tests/test_known_issues.sh` (`RUN_KNOWN_ISSUES=1`) — scenarios 15–16.
 - `tests/test_codex_hook_wrapper.sh` — scenario 17.
 - `tests/test_codex_session_name.sh` — scenario 18.
+- `tests/test_log_cap.sh` — scenario 19.
 
 Run the whole suite with
 `for t in tests/test_*.sh; do "$t"; done` (see `TESTING.md`); `tests/test_resolve_session_name.py`

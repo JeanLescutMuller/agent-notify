@@ -4,6 +4,13 @@ What was fixed, why, and how it is tested; cited by code comments and tests. Ope
 
 ## Resolved history
 
+- **`notify.log` never trimmed (v5.13, 2026-11-03):** the shared log grew to 86 MB / 1.2 M lines in
+  18 days (first line 2026-10-16, ~5 MB/day). `trim_log` now runs at the start of the detached
+  debounced refresh (at most every 300 s, never on a hook's critical path): over
+  `NOTIFY_LOG_MAX_BYTES` (default 100 MB, the user's choice) it keeps the newest half, cut at a
+  line start, so trims come about every 10 days. A line written by another call during a trim can
+  be lost; accepted. Tested by `tests/test_log_cap.sh`, including the real default on a 106 MB file.
+
 - **Subagent completion tracking (v5.12, 2026-11-03):** Claude's `Stop` fires when the parent's
   turn ends, even while subagents it dispatched still run (the Agent tool now runs in the
   background by default). v5.0-v5.11 detected that by scanning the parent transcript's tail for
