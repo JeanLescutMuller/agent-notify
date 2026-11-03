@@ -21,7 +21,7 @@ branch-by-branch unit-test decomposition — see `tests/AGENTS.md` for the full 
 | File | Scenarios |
 |---|---|
 | `test_framework.sh` | Adapter selection (generic/codex/claude) × full state lifecycle, `USER_STATE` reset/`OnHold`/`Acknowledged` guardrails, `CLAUDE_STATE` v4 alias, tmux popup PID targeting + idempotency, absolute-path use in every `tmux-hooks.conf` `run-shell` line, `refresh --all` isolation including a later-visited invoker and detached refresh after status, all four renderers' literal output, a session-disabled renderer being skipped by the core dispatcher |
-| `test_subagent_tracking.sh` | Fixture-transcript automation of the live T1/T2/T3/T5 scenarios below: single dispatched subagent, three parallel/staggered subagents, silent background completion resolved via `refresh` alone, and an orphaned subagent whose `pending_finish` marker never expires |
+| `test_subagent_tracking.sh` | Stop-hook payloads (`background_tasks`) for the live T1/T2/T3/T5 shapes: one subagent, three staggered ones, a silent parent (refresh never invents Finished), a hung subagent then `idle_prompt`, subagent tool calls during a deferral; every payload variant (empty, missing, null, wrong type, junk entries, shells only, ended subagents in 5 statuses, unknown types, malformed, empty stdin, 400 entries); no stdin, a pipe that never closes (returns within the 2 s hook timeout), timing; a first event with no session dir and a renderer that reads stdin; only Finished deferred; OnHold kept; manual Finished never deferred; generic/codex adapters never defer; a v5.11 leftover `pending_finish` ignored |
 | `test_tmux_focus.sh` | `user-focus` pane switching: focused pane → `Acknowledged`, other known panes → `Seen`, a plain shell pane untouched, `OnHold`/`Acknowledged` immune to the automatic path, empty `$TMUX_PANE` is a no-op |
 | `test_renderer_settings.sh` | The real three-file settings merge (default < global < session) reaching actual renderer dispatch, and a session-scoped `enabled=false` overriding a default-enabled renderer |
 | `test_waiting_debounce.sh` | `sound-bell`/`sound-tts`'s `waiting_debounce_secs` (see HISTORY.md's 2026-09-16 resolved entry): a `WaitingForUser` cleared within the window never rings/speaks, one that outlives it still does, `state.env`/other renderers update immediately regardless, `waiting_debounce_secs=0` stays fully synchronous, and background work never holds a piped hook's stdout/stderr (Codex `Hook failed`, HISTORY.md 2026-10-06) |
@@ -33,7 +33,7 @@ branch-by-branch unit-test decomposition — see `tests/AGENTS.md` for the full 
 | `test_manifests.sh` | Static `jq`/grep checks on both plugin manifests: absolute hook paths, event-appropriate timeouts, the documented `AskUserQuestion`/catch-all `PreToolUse` overlap, `NOTIFY_AGENT_TYPE=codex` always present, hook-event coverage matching this file's own mapping table |
 | `test_known_issues.sh` | Opt-in (`RUN_KNOWN_ISSUES=1`) tripwires for two currently-accepted Todoist (`Repo: agent-notify`)/CLAUDE.md risks: the unlocked concurrent state-update race (informational — reproducing a real race black-box is probabilistic, so it never fails the suite by itself) and the shell-metadata trust boundary (deterministic) |
 
-These suites call the adapters directly (or through fixture transcripts standing in for a real
+These suites call the adapters directly (or through hand-built hook payloads standing in for a real
 Claude session) with representative native context. They deliberately do not pretend to test
 whether Claude or Codex fired the native hook; use the live checks below for that boundary.
 
@@ -160,12 +160,10 @@ but testing both proves that each native hook reaches the same normalized path.
 
 ## Live Claude subagent regression
 
-These scenarios exercise Claude's real hook and transcript behavior. T1, T2, T3, and T5's
-`adapter_has_pending_work`/`pending_finish` logic are automated against fixture transcripts in
-`tests/test_subagent_tracking.sh` — what's not reproduced there is whether Claude's real hook
-lifecycle actually produces transcripts shaped like these scenarios in the first place, and T4's
-concurrent-hook nondeterminism, which needs a live session either way. Use a disposable Claude
-session for that live verification.
+These scenarios exercise Claude's real hooks. `tests/test_subagent_tracking.sh` replays their
+Stop payloads; what it cannot prove is that the deployed Claude CLI still sends `background_tasks`
+on the Stop hook's stdin and still wakes the parent when a subagent ends. Re-run T1-T3 after a
+Claude Code upgrade, in a disposable session.
 
 ### Bound a log window
 
@@ -195,15 +193,15 @@ Prompt:
 > Dispatch one subagent whose only tool call is `sleep 5`, then wait for its result and answer with
 > “T1 complete.”
 
-Expected behavior:
+Expected log (the subagent runs in the background, so the first Stop comes before it ends):
 
 ```text
 update AGENT_STATE Working
-update AGENT_STATE Finished suppressed (agent still has pending work)
-pending_finish resolved (subagents cleared) - applying Finished
+update AGENT_STATE Finished deferred (subagents still running)
+update AGENT_STATE Finished
 ```
 
-There should be one audible/visual Finished transition, after the dispatched work clears.
+One audible/visual Finished, after the subagent ends. No `pending_finish` file is ever written.
 
 ### T2 — parallel dispatched subagents
 
@@ -212,9 +210,9 @@ Prompt:
 > Dispatch three subagents in parallel. Their only tool calls are respectively `sleep 3`,
 > `sleep 7`, and `sleep 12`. Wait for all three, then answer with “T2 complete.”
 
-Expected: no intermediate Finished renderer pass and exactly one final Finished after the longest
-task. This also stresses the still-open unlocked writer path; inspect the log for interleaved
-`RENDER` groups or corrupted `state.env`.
+Expected: one or more `deferred` lines, no intermediate Finished renderer pass, and exactly one
+final Finished after the longest task. This also stresses the still-open unlocked writer path;
+inspect the log for interleaved `RENDER` groups or corrupted `state.env`.
 
 ### T3 — silent background completion
 
@@ -223,9 +221,8 @@ Prompt:
 > Dispatch one background subagent whose only tool call is `sleep 20`, then end the parent turn
 > immediately and do not poll it.
 
-Expected: the parent Stop is suppressed while the transcript reports pending work. After completion,
-the shortened refresh interval should resolve Finished without another parent-side prompt. Allow up
-to roughly 15 seconds after completion for the poll.
+Expected: the parent Stop is deferred; when the subagent ends, Claude wakes the parent, whose new
+turn logs `update AGENT_STATE Finished` within a few seconds. There is no polling any more.
 
 ### T4 — AskUserQuestion hook overlap
 
@@ -234,11 +231,11 @@ fixed, both `WaitingForUser` and catch-all `Working` hook commands may run, in n
 Record the result when changing the plugin manifest; the eventual fix should emit only
 `WaitingForUser` for this tool.
 
-### T5 — long/orphaned background tool
+### T5 — hung or killed subagent
 
-The historical 90-second background Bash scenario once left the Claude subagent without a final
-completion signal. Repeat only when investigating the external orphan issue in Todoist (`Repo: agent-notify`); an orphan
-will intentionally leave `pending_finish` unresolved.
+If a subagent never ends, or ends without Claude waking the parent (a killed or failed subagent
+was not measured on 2.1.317), the pane stays Working until Claude's `idle_prompt` Notification
+sets Idle about 60 s after the last Stop. Check that Idle arrives and no stale Finished precedes it.
 
 ## Manual renderer checks
 

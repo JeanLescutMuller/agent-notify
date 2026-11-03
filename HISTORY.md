@@ -4,6 +4,25 @@ What was fixed, why, and how it is tested; cited by code comments and tests. Ope
 
 ## Resolved history
 
+- **Subagent completion tracking (v5.12, 2026-11-03):** Claude's `Stop` fires when the parent's
+  turn ends, even while subagents it dispatched still run (the Agent tool now runs in the
+  background by default). v5.0-v5.11 detected that by scanning the parent transcript's tail for
+  `agentId:` lines without a matching `enqueue … <task-id>` entry, kept a `pending_finish` marker,
+  and shortened the background refresh to 15 s to resolve it. A probe on Claude Code 2.1.317
+  (45 hook calls, 4 runs) showed every hook gets stdin JSON and `Stop` carries `background_tasks`
+  (`id`, `type` subagent|shell, `status`); when a subagent ends, Claude always wakes the parent
+  (UserPromptSubmit, then a second Stop with the list emptied). v5.12 defers Finished while a
+  `subagent` entry is `running` and stores nothing; the marker, the transcript scan, the
+  transcript-path lookup and the 15 s refresh are gone. Background shells (`type: shell`, e.g. a
+  dev server) never defer. This also closed two open questions: a stale Finished rendered before
+  new activity (no marker any more) and orphaned subagents keeping a marker forever (a hung one
+  now stays Working until Claude's `idle_prompt` sets Idle). Not measured: whether a killed or
+  failed subagent wakes the parent (if not, `idle_prompt` still moves the pane to Idle). Claude Code passes hook stdin on a Unix socket, not a pipe: a first draft that
+  read only pipes passed every fixture test yet missed the live T3 payload; the adapter now reads
+  any non-terminal stdin, and a socket test guards it. Tested by `tests/test_subagent_tracking.sh`
+  (17 scenarios) and live T1-T3 on 2.1.317 (2026-11-03, haiku, ~$0.05): T3 logged `Finished
+  deferred`, then one Finished from the wake-up turn; T1/T2 one Finished each.
+
 - **Cross-session identity corruption during refresh (2026-10-08):** v5.9 captures the
   invoking adapter/session/PID/directory once, before loading saved sessions. Previously,
   a current session visited later in `refresh --all` adopted the preceding session's

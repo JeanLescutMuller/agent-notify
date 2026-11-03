@@ -45,7 +45,7 @@ Variables:
 | `NOTIFY_AGENT_WD` | Agent working directory |
 | `NOTIFY_AGENT_PID` | Native agent process PID, if useful diagnostically |
 | `NOTIFY_SESSION_NAME` | Optional human-readable title |
-| `NOTIFY_TRANSCRIPT_PATH` | Optional native transcript used by a custom pending-work adapter |
+| `NOTIFY_TRANSCRIPT_PATH` | Optional native transcript path, stored as `TRANSCRIPT_PATH` and passed to `adapter_has_pending_work` |
 | `NOTIFY_RENDER_PID` | Root shell PID when process-tree/tmux discovery is unavailable |
 | `NOTIFY_ROOT_DATA_DIR` | Test/advanced override for runtime state root |
 | `NOTIFY_CONFIG_DIR` | Test/advanced override for persistent configuration root |
@@ -71,7 +71,11 @@ adapter_has_pending_work <transcript-path>
   status output and changed-agent-state rendering. The default is a no-op; adapters can cache
   expensive lookups under `SESSION_DATA_DIR`. The core persists changed names as escaped shell
   assignments. The callback must use the loaded session's identity, not the invoker's context.
-- `adapter_has_pending_work` returns success while work remains outstanding and failure otherwise.
+- `adapter_has_pending_work` is asked only for a Finished request. It returns success while work
+  remains outstanding (Finished is then dropped, nothing is stored: the agent must send a new
+  Finished later) and failure otherwise. It may read the hook's own stdin payload; the core keeps
+  stdin untouched for it (renderers get `/dev/null`). It must fail open, never read a terminal, and return within 1 s (Claude Code passes stdin
+  on a socket, not a pipe).
 - Agent-specific helpers belong beside the adapter, not under a renderer.
 
 The core snapshots the invoking adapter's identity once before loading any saved
@@ -88,10 +92,10 @@ input, native environment variables, or transcript formats.
 directory is a symlink to the shared runtime; Claude-specific parsing remains under
 `adapters.d/claude/`.
 
-The current adapter uses Claude environment variables and a bounded transcript scan for dispatched
-subagent completion. Current [Claude hook documentation](https://code.claude.com/docs/en/hooks)
-describes stdin JSON and native subagent lifecycle hooks; validating and adopting those is tracked
-in Todoist (`Repo: agent-notify`) rather than assumed from documentation alone.
+The adapter takes its session from Claude's environment variables. For the `Stop` hook it reads the
+stdin JSON ([Claude hook documentation](https://code.claude.com/docs/en/hooks)): a running
+`subagent` in `background_tasks` defers Finished until Claude's wake-up turn (v5.12, measured on
+Claude Code 2.1.317; HISTORY.md "Subagent completion tracking").
 
 ## Codex integration
 

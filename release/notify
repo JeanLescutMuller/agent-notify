@@ -15,7 +15,7 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.11"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.12"  # hardcoded; bump manually per notable change
 
 # Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
 # (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
@@ -68,17 +68,8 @@ SAY=false
 say() { $SAY && [ "${NOTIFY_QUIET:-false}" != "true" ] && printf '%s\n' "$*"; return 0; }
 
 ##### Agent adapter context #####
-# Claude Code sets CLAUDE_CODE_SESSION_ID and CLAUDE_PROJECT_DIR as plain
-# environment variables on every hook command invocation (confirmed via
-# direct inspection - NOT documented, and NOT delivered via stdin the way a
-# hook's JSON payload usually is for other integrations, so don't assume
-# this generalizes to a different hook style). From these we can locate this
-# session's own transcript file - the ONLY reliable source for
-# the Claude adapter to detect outstanding dispatched subagents.
-# Fast path: Claude Code's own project-dir encoding is "/" -> "-" with a
-# leading "-" (confirmed for two real paths); verify the guess against the
-# filesystem and fall back to a bounded search by session id if it's ever
-# wrong (untested edge cases: dots, spaces, unusual characters in the path).
+# The adapter turns the agent's native hook context into AGENT_* values, and
+# says whether a Finished must wait for outstanding work (adapter_has_pending_work).
 AGENT_TYPE="${NOTIFY_AGENT_TYPE:-}"
 if [ -z "$AGENT_TYPE" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then AGENT_TYPE="claude"; fi
 AGENT_TYPE="${AGENT_TYPE:-generic}"
@@ -245,41 +236,11 @@ persist_transcript_path() {
   { grep -v '^TRANSCRIPT_PATH=' "$f" 2>/dev/null; echo "$line"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
-# Detects subagents dispatched (via the Agent tool) by RENDER_PID's own
-# session that haven't completed yet, per that session's own transcript.
-# See HISTORY.md ("Subagent completion tracking") for the full investigation -
-# short version: a dispatched agent's tool_result always contains a literal
-# "agentId: <hex>" line; the moment that agent's underlying task actually
-# completes (whether or not the parent has looked at it yet), Claude Code
-# itself appends a {"type":"queue-operation","operation":"enqueue",...,
-# "content":"...<task-id><hex></task-id>...<status>completed</status>..."}
-# entry to the SAME transcript - authoritative, low-latency, and unlike a
-# subagent's own hooks (which never fire on completion - see HISTORY.md), this
-# is written reliably because the parent's own transcript is what's doing
-# the writing. Bounded to a tail window of the transcript for speed (the
-# Stop hook's own timeout is 2s in plugin.json) - a subagent dispatched
-# further back than that window would be missed; same class of tradeoff as
-# the Claude session-name resolver's backward chunk scan.
-# Returns 0 (true - still pending) or 1 (false - nothing outstanding).
+# Whether this invocation's agent still has work outstanding (e.g. Claude
+# subagents still running when its Stop fires). Asked only for a Finished
+# request; the adapter answers from its own hook payload (and may use the
+# stored transcript path). 0 = still pending, 1 = nothing outstanding.
 has_pending_work() { adapter_has_pending_work "$1"; }
-
-# If RENDER_PID owes a suppressed Finished (see cmd_update_state) and its
-# subagents have since cleared, applies it now and clears the marker. Called
-# both reactively (start of cmd_update_state, so the session's own next hook
-# event resolves it) and proactively (end of cmd_refresh, so it resolves even
-# if the session stays completely silent - see HISTORY.md, this is what makes
-# the fix work for the T6/T8/T10-style "parent goes idle" case).
-try_resolve_pending_finish() {
-  local RENDER_PID="$1" session_dir="$ROOT_DATA_DIR/$1"
-  [ -f "$session_dir/pending_finish" ] || return 0
-  read_and_export_static "$RENDER_PID"
-  if has_pending_work "$TRANSCRIPT_PATH"; then
-    return 0
-  fi
-  rm -f "$session_dir/pending_finish"
-  log "$RENDER_PID" "pending_finish resolved (subagents cleared) - applying Finished"
-  update_state_and_render "$RENDER_PID" "AGENT_STATE" "Finished" true
-}
 
 read_and_export_state() {
   local RENDER_PID="$1"
@@ -367,7 +328,7 @@ call_all_renderers() {
       continue
     fi
     log "$RENDER_PID" "RENDER $TRIGGER $renderer"
-    "$RENDERERS_DIR/$renderer/main"
+    "$RENDERERS_DIR/$renderer/main" </dev/null  # the hook payload stays for the adapter
   done
 }
 
@@ -523,11 +484,6 @@ cmd_refresh() {
   # session must render as "nothing to report" until a real transition happens.
   read_and_export_state "$RENDER_PID"
   call_all_renderers "$RENDER_PID" "REFRESH"
-
-  # 6. Proactive half of subagent-completion tracking: catches a suppressed
-  # Finished even if this session's own hooks never fire again (see
-  # try_resolve_pending_finish and the debounce-interval tightening below).
-  try_resolve_pending_finish "$RENDER_PID"
 }
 
 cmd_status() {
@@ -600,22 +556,14 @@ cmd_update_state() {
   [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
   [ -z "$CMD_ARG2" ] && { echo "Usage: notify update <AGENT_STATE|USER_STATE> <value> [--all]"; exit 1; }
   persist_transcript_path "$RENDER_PID"
-  # Reactive half of subagent-completion tracking (see try_resolve_pending_finish):
-  # any hook firing again for this session is a chance to apply a Finished
-  # that was suppressed earlier, before processing whatever this call itself
-  # is asking for.
-  try_resolve_pending_finish "$RENDER_PID"
-
-  # Don't let Stop's "the main turn ended" get reported as Finished while this
-  # session has dispatched subagents (fork or otherwise) that haven't
-  # completed yet, per its own transcript - see HISTORY.md ("Subagent completion
-  # tracking") for the full writeup. Suppress the transition and remember to
-  # retry via try_resolve_pending_finish instead of reporting done-when-not.
+  # Don't report Stop's "the main turn ended" as Finished while the agent's
+  # dispatched work (Claude subagents) is still running. Nothing is stored:
+  # the agent's next turn (Claude wakes the parent when a subagent ends) sends
+  # its own Working and Finished. See HISTORY.md ("Subagent completion tracking").
   if [ "$CMD_ARG1" = "AGENT_STATE" ] && [ "$CMD_ARG2" = "Finished" ]; then
     read_and_export_static "$RENDER_PID"
     if has_pending_work "$TRANSCRIPT_PATH"; then
-      touch "$ROOT_DATA_DIR/$RENDER_PID/pending_finish"
-      log "$RENDER_PID" "update AGENT_STATE Finished suppressed (agent still has pending work)"
+      log "$RENDER_PID" "update AGENT_STATE Finished deferred (subagents still running)"
       say "AGENT_STATE=Finished deferred: subagents still running (session $RENDER_PID)"
       return
     fi
@@ -862,15 +810,7 @@ _last_refresh_file="$ROOT_DATA_DIR/.last_refresh"
 _now_epoch=$(date '+%s')
 _last_refresh=0
 [ -f "$_last_refresh_file" ] && _last_refresh=$(cat "$_last_refresh_file" 2>/dev/null)
-# Any session with a suppressed Finished (pending_finish - see
-# try_resolve_pending_finish) shortens the debounce so it gets resolved
-# within seconds of its subagents actually clearing, instead of waiting up
-# to 5 minutes - cheap to check (just file existence) and only changes
-# anything while a subagent is genuinely still outstanding somewhere.
 _refresh_interval=300
-for _d in "$ROOT_DATA_DIR"/[0-9]*/; do
-  [ -f "$_d/pending_finish" ] && { _refresh_interval=15; break; }
-done
 if [ $((_now_epoch - _last_refresh)) -ge $_refresh_interval ]; then
   echo "$_now_epoch" > "$_last_refresh_file"
   # Detached from the hook's stdio so a hook runner waiting for pipe EOF

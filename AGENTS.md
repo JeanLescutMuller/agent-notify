@@ -84,7 +84,6 @@ manifest or hook-command change.
 └── <shell-pid>/
     ├── static.env
     ├── state.env
-    ├── pending_finish                  # Claude adapter only, when applicable
     └── renderers.d/<renderer>/settings.json
 ```
 
@@ -164,14 +163,15 @@ selection/mouse forwarding and adds acknowledgement for clicks on an already-act
 
 ## Claude adapter notes
 
-The Claude adapter currently derives transcript context from `CLAUDE_CODE_SESSION_ID` and
-`CLAUDE_PROJECT_DIR`. `adapter_has_pending_work` compares dispatched Agent IDs with completion
-queue entries in a bounded transcript tail. A `Stop`-requested `Finished` is suppressed while work
-remains and represented by `pending_finish`; later updates or debounced `refresh --all` resolve it.
-
-This reflects behavior verified during the 2026-08-27 investigation. Newer Claude documentation
-advertises stdin context and native `SubagentStart`/`SubagentStop`; validate that against the
-deployed CLI before replacing the working fallback. See Todoist (`Repo: agent-notify`) and `TESTING.md`.
+The Claude adapter takes its session from `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PROJECT_DIR`.
+For a Finished request (the `Stop` hook) it reads the hook's stdin JSON: a `background_tasks` entry
+with `type` `subagent` and `status` `running` defers Finished, with nothing stored. When the
+subagent ends, Claude wakes the parent, whose next turn sends its own Working and Finished
+(measured on Claude Code 2.1.317, 2026-11-03; HISTORY.md "Subagent completion tracking"). stdin is
+never read from a terminal, and with a 1 s limit; Claude Code passes it on a socket, not a pipe
+(a v5.12 draft that read only pipes missed every live payload). Anything unexpected fails open
+(Finished at once). Each check logs `pending-work check: <n>-byte payload, running subagents: <k>`. Renderers run with stdin from `/dev/null` so they cannot consume the payload.
+Do not bring back transcript parsing or a polling marker: v5.12 removed both.
 
 ## Renderer settings
 

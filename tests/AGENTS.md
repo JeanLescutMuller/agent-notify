@@ -23,8 +23,8 @@ except `test_resolve_session_name.py`. Fake `tmux`/`claude`/`codex` binaries are
 per test file rather than through a shared generator, since each one's canned responses are
 scenario-specific enough that a shared abstraction wasn't worth it.
 
-Tags: **[done]** implemented and passing. **[fixture]** scripted against a hand-built `.jsonl`
-transcript standing in for a real Claude session — this is what makes T1–T3/T5 automatable at all.
+Tags: **[done]** implemented and passing. **[fixture]** scripted against hand-built Claude hook payloads
+standing in for a real Claude session — this is what makes T1–T3/T5 automatable at all.
 **[stub]** needs a fake `tmux`/`claude`/`codex` binary on `PATH`. **[opt-in]** documents a
 currently-accepted bug or risk from Todoist (`Repo: agent-notify`); kept out of the default pass/fail suite since it's
 inherently racy or intentionally-not-fixed, gated behind `RUN_KNOWN_ISSUES=1`.
@@ -74,37 +74,36 @@ belongs to the core, not the renderer.
 
 ## New scenarios
 
-### 5. [fixture, done] Subagent completion (T1 shape) — `tests/test_subagent_tracking.sh`
+### 5. [fixture, done] Subagent lifecycle shapes (T1/T2/T3/T5) — `tests/test_subagent_tracking.sh`
 
-One fixture transcript with a dispatched `agentId` and no completion entry yet → `Finished` is
-suppressed, `pending_finish` marker created. Append a completion entry to the same fixture and
-fire the next hook event (a plain `event Idle`) → marker resolves reactively, `Finished` renders
-first, then the new `Idle` request still applies — locking down the currently-undecided ordering
-from Todoist (`Repo: agent-notify`)'s "Decide how new activity supersedes a pending finish" as today's actual behavior,
-not a claim it's correct. Automates `TESTING.md`'s T1 without a live Claude session.
+Fixtures are Stop-hook stdin payloads (`background_tasks`, the shape measured on Claude Code
+2.1.317), piped into `notify event Finished`; nothing reads a transcript any more. T1: one running
+subagent defers Finished with no render and no marker; the wake-up turn (Working, then Stop with
+an empty list) gives exactly one Finished. T2: three subagents ending one by one; Finished only
+after the last. T3: a silent parent: repeated `refresh` never invents a Finished. T5: a hung
+subagent: `idle_prompt`'s Idle still applies, with no stale Finished first. Plus a subagent's own
+tool calls (PreToolUse with `agent_id`) during a deferral.
 
-### 6. [fixture, done] Parallel subagents (T2 shape)
+### 6. [fixture, done] Payload variants
 
-Three dispatched `agentId`s in one fixture, completion entries added one at a time across three
-successive `refresh` calls → assert no `Finished` fires until the *last* one clears (checked via
-`assert_log_not_contains "pending_finish resolved"` after each partial completion), and exactly
-one resolution happens overall. Automates T2.
+Must not defer: empty list, missing field, `null`, a non-list, junk entries, shells only, a
+subagent `completed`/`failed`/`killed`/`stopped`/`cancelled`, an unknown task type, malformed
+JSON, an empty pipe, no stdin at all, and a pipe that stays open with no data (must return within
+the Stop hook's 2 s timeout). Must defer: a running subagent among running shells, among ended
+subagents, and as entry 401 of a large payload. A deferral returns at once.
 
-### 7. [fixture, done] Silent background completion (T3 shape)
+### 7. [fixture, done] Interplay with the rest of notify
 
-Dispatched work with the parent's `Stop` firing before any completion entry, then completion
-appears with **no further hook event** for that session — only a `refresh` call (standing in for
-the debounced background refresh). Asserts `Finished` still resolves purely from that proactive
-path (`cmd_refresh`'s own `try_resolve_pending_finish` call). Automates T3's "parent goes idle"
-resolution path.
+A first event with no session dir, where `cmd_refresh` runs the renderers before the check, using
+a scratch copy of `release/` with an extra renderer that reads all of its stdin (fails if the
+core stops giving renderers `/dev/null`). Only Finished is deferred (WaitingForUser and Idle
+apply). `USER_STATE=OnHold` survives a deferral and the final Finished. A manual
+`notify update AGENT_STATE Finished` is never deferred. The generic and codex adapters never defer.
 
-### 8. [fixture, done] Orphaned subagent (T5 shape)
+### 8. [fixture, done] Upgrade from v5.11
 
-A fixture that never gains a completion entry. Runs several `refresh`es and asserts
-`pending_finish` is still present and no `Finished` ever fires — this is *documented, accepted*
-behavior (an orphan is supposed to stay pending forever, per Todoist (`Repo: agent-notify`)), not a bug to assert away.
-Deterministic (nothing about it is racy), so it runs in the default suite rather than the opt-in
-`test_known_issues.sh` file — a good tripwire if pending-finish ever grows a timeout later.
+A session still holding a v5.11 `pending_finish` file: `refresh` never applies Finished from it,
+and it no longer shortens the 300 s background refresh to 15 s.
 
 ### 9. [stub, done] tmux focus switching — `tests/test_tmux_focus.sh`
 
@@ -219,8 +218,7 @@ The target session's saved identity must win over an unrelated invoker's session
 - `tests/lib/test_helpers.sh` — shared `pass`/`fail`/`assert_*`/`count_log_occurrences` helpers,
   sourced by every file below.
 - `tests/test_framework.sh` — scenarios 1–4.
-- `tests/test_subagent_tracking.sh` — scenarios 5–8, fixture transcripts built inline per test
-  (not pre-committed files — each scenario needs a different dispatch/completion sequence).
+- `tests/test_subagent_tracking.sh` — scenarios 5–8, Stop payloads built inline per test.
 - `tests/test_tmux_focus.sh` — scenario 9.
 - `tests/test_renderer_settings.sh` — scenario 10.
 - `tests/test_notify_init.sh` — scenario 11.
