@@ -214,11 +214,12 @@ The target session's saved identity must win over an unrelated invoker's session
 ### 19. [done] `notify.log` size cap — `tests/test_log_cap.sh`
 
 `trim_log` runs in the detached debounced refresh: over `NOTIFY_LOG_MAX_BYTES` (default 100 MB) it
-keeps the newest half, cut at a line start. Scenarios: over the cap (newest line kept, oldest gone,
-no cut line, one `notify.log trimmed` line, no temp file left); under the cap (old content
-byte-identical); not due (no trim between refreshes); a non-numeric cap and a missing log (no trim,
-no error); and the real default on a 106 MB file (trimmed to ~50 MB while the hook call returns
-within 1 s). Exactly at the cap is not testable end to end: the hook call appends lines first.
+renames `notify.log` to `notify.log.1` (no copy). Scenarios: over the cap (`.1` holds the old log
+byte-identical, the new log starts with one `rotated` line; a second rotation replaces `.1`, never
+a third file); under the cap (old content byte-identical); not due (no rotation between
+refreshes); a non-numeric cap and a missing log (no rotation, no error); and the real default on a
+106 MB file (rotated within a second, the hook call returns at once). Exactly at the cap is not
+testable end to end: the hook call appends lines first.
 
 ---
 

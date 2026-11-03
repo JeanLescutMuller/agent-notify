@@ -79,7 +79,8 @@ manifest or hook-command change.
 
 ```text
 /tmp/agent-notify-$USER/
-├── notify.log                      # capped at 100 MB: keeps the newest half (trim_log, v5.13)
+├── notify.log                      # over 100 MB: renamed to notify.log.1 (trim_log, v5.14)
+├── notify.log.1                    # the previous log, replaced at each rotation
 ├── .last_refresh
 └── <shell-pid>/
     ├── static.env
