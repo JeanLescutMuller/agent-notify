@@ -4,6 +4,17 @@
 # assertion helpers used across tests/test_*.sh.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Never talk to the user's own tmux server or Claude session from a test, even
+# when the suite is started from inside one: $TMUX names the live server's
+# socket and $TMUX_PANE a live pane (tmux-pane-bg would recolor it). Every
+# tmux call goes to a test-only socket folder instead; a test that needs a real
+# server starts it there and kills it. agent-tracker's files likewise point to
+# a folder that does not exist unless a test creates its own.
+unset TMUX TMUX_PANE CLAUDE_CODE_SESSION_ID CLAUDE_PROJECT_DIR
+export TMUX_TMPDIR="/tmp/notify-tests-tmux-$(id -u)"
+mkdir -p "$TMUX_TMPDIR" && chmod 700 "$TMUX_TMPDIR"
+export AGENT_TRACKER_HOME="/tmp/notify-tests-no-agent-tracker-$(id -u)"
 NOTIFY="$PROJECT_DIR/release/notify"
 
 pass_count=0

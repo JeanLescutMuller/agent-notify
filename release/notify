@@ -15,7 +15,7 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.14"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.15"  # hardcoded; bump manually per notable change
 
 # Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
 # (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
@@ -198,27 +198,91 @@ migrate_managed_block_label() {
 
 ##### Command Helpers #####
 
-read_and_export_static() {
+# static.env keeps only what agent-notify itself needs and nothing else gives
+# (v5.15, agent-tracker v1): AGENT_TYPE (which adapter owns the shell),
+# AGENT_SESSION_ID (to detect a new agent session in the same shell) and
+# SESSION_NAME (the adapter's cached title). The shell PID is the directory
+# name; pane, window, tmux session, working directory and agent PID are derived
+# at read time by derive_session_context. Keys written by v5.14 and older
+# (SHELL_PID, AGENT_WD, AGENT_PID, SESSION_TMUX_*, TRANSCRIPT_PATH, TIMESTAMP)
+# are ignored on load and dropped at the next rewrite. Field table: AGENTS.md.
+load_static() {
   local RENDER_PID="$1"
   SESSION_DATA_DIR="$ROOT_DATA_DIR/$RENDER_PID"
   AGENT_TYPE=""
   AGENT_SESSION_ID=""
-  AGENT_WD=""
-  AGENT_PID=""
   SESSION_NAME=""
-  SESSION_TMUX_PANE=""
-  SESSION_TMUX_WINDOW=""
-  SESSION_TMUX_SESSION=""
-  TRANSCRIPT_PATH=""
+  CLAUDE_UUID=""
   [ -f "$SESSION_DATA_DIR/static.env" ] && source "$SESSION_DATA_DIR/static.env"
   # Read legacy v4 session files during the in-place migration.
   AGENT_SESSION_ID="${AGENT_SESSION_ID:-${CLAUDE_UUID:-}}"
-  AGENT_WD="${AGENT_WD:-${CLAUDE_WD:-}}"
-  AGENT_PID="${AGENT_PID:-${CLAUDE_PID:-}}"
-  SESSION_NAME="${SESSION_NAME:-}"
   AGENT_TYPE="${AGENT_TYPE:-claude}"
   load_adapter "$AGENT_TYPE"
-  export SESSION_DATA_DIR SHELL_PID AGENT_TYPE AGENT_SESSION_ID AGENT_WD AGENT_PID SESSION_NAME SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION TRANSCRIPT_PATH
+}
+
+read_and_export_static() {
+  load_static "$1"
+  derive_session_context "$1"
+  export SESSION_DATA_DIR AGENT_TYPE AGENT_SESSION_ID AGENT_WD AGENT_PID SESSION_NAME SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION
+}
+
+# The agent-tracker record of the loaded session, when agent-tracker is
+# installed: $AGENT_TRACKER_HOME/data/sessions/<uuid>/last_seen.json, written by
+# `agent-tracker tick`. Optional: a missing or unreadable file gives nothing,
+# and agent-notify then relies on tmux alone. Sets TRACKER_CWD, TRACKER_PID,
+# TRACKER_PANE.
+read_agent_tracker() {
+  TRACKER_CWD="" TRACKER_PID="" TRACKER_PANE=""
+  [[ "$AGENT_SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  local f="${AGENT_TRACKER_HOME:-$HOME/opt/agent-tracker}/data/sessions/$AGENT_SESSION_ID/last_seen.json" line
+  [ -r "$f" ] || return 0
+  line="$(jq -r '[(.cwd // "" | tostring), (.pid // "" | tostring), (.pane_id // "" | tostring)] | join("\u001f")' "$f" 2>/dev/null)" || return 0
+  IFS=$'\x1f' read -r TRACKER_CWD TRACKER_PID TRACKER_PANE <<< "$line"
+}
+
+# Where RENDER_PID's session runs, derived now instead of copied into
+# static.env (copies went stale: a renamed tmux session, see cmd_refresh's
+# 2026-08-18 note). Sets SESSION_TMUX_PANE/WINDOW/SESSION, AGENT_WD, AGENT_PID.
+#   pane       1. tmux: the pane whose root process is RENDER_PID (one call)
+#              2. the invoking process's own $TMUX_PANE, for CURRENT_PID only
+#                 (a pane whose root is not a shell)
+#              3. agent-tracker's pane_id, if tmux still knows that pane
+#   AGENT_WD   the invoking hook's own context, if it is this very session;
+#              else agent-tracker's cwd; else tmux's pane_current_path
+#   AGENT_PID  the invoking context; else agent-tracker's pid if alive; else
+#              empty (`notify status` asks the adapter's process-tree lookup)
+derive_session_context() {
+  local RENDER_PID="$1" panes="" line="" path="" sep=$'\x1f'
+  SESSION_TMUX_PANE="" SESSION_TMUX_WINDOW="" SESSION_TMUX_SESSION="" AGENT_WD="" AGENT_PID=""
+  if command -v tmux >/dev/null 2>&1; then
+    panes="$(tmux list-panes -a -F "#{pane_pid}${sep}#{pane_id}${sep}#{window_id}${sep}#{pane_current_path}${sep}#{session_name}" 2>/dev/null)"
+    line="$(awk -F "$sep" -v pid="$RENDER_PID" '$1 == pid { print; exit }' <<< "$panes")"
+    [ -n "$line" ] && IFS="$sep" read -r _ SESSION_TMUX_PANE SESSION_TMUX_WINDOW path SESSION_TMUX_SESSION <<< "$line"
+  fi
+  read_agent_tracker
+  if [ -z "$SESSION_TMUX_PANE" ]; then
+    if [ "$RENDER_PID" = "$CURRENT_PID" ] && [ -n "${TMUX_PANE:-}" ]; then
+      SESSION_TMUX_PANE="$TMUX_PANE"
+    elif [ -n "$TRACKER_PANE" ] && awk -F "$sep" -v pane="$TRACKER_PANE" '$2 == pane { found=1 } END { exit !found }' <<< "$panes"; then
+      # agent-tracker's pane_id is up to 60 s old: used only if tmux still has it.
+      SESSION_TMUX_PANE="$TRACKER_PANE"
+    fi
+    if [ -n "$SESSION_TMUX_PANE" ]; then
+      SESSION_TMUX_SESSION=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#S' 2>/dev/null)
+      SESSION_TMUX_WINDOW=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#{window_id}' 2>/dev/null)
+    fi
+  fi
+  # The invoker's adapter context describes RENDER_PID only when the invoker is
+  # that session's own agent hook: same shell and same session id. Otherwise
+  # (refresh --all, user-focus, the tmux menu) it belongs to someone else.
+  if [ "$RENDER_PID" = "$CURRENT_PID" ] && [ -n "$INVOKING_SESSION_ID" ] && [ "$INVOKING_SESSION_ID" = "$AGENT_SESSION_ID" ]; then
+    AGENT_WD="$INVOKING_AGENT_WD"
+    AGENT_PID="$INVOKING_AGENT_PID"
+  fi
+  AGENT_WD="${AGENT_WD:-${TRACKER_CWD:-$path}}"
+  if [ -z "$AGENT_PID" ] && [[ "$TRACKER_PID" =~ ^[0-9]+$ ]] && kill -0 "$TRACKER_PID" 2>/dev/null; then
+    AGENT_PID="$TRACKER_PID"
+  fi
 }
 
 # Refresh the loaded session's name without re-resolving unrelated metadata.
@@ -237,25 +301,10 @@ refresh_session_name() {
   fi
 }
 
-# Persists ADAPTER_TRANSCRIPT_PATH (this invocation's adapter context) into
-# RENDER_PID's static.env, if it's set and different from what's already
-# there. Cheap no-op otherwise, so safe to call on every hook-driven update -
-# this is the ONLY place TRANSCRIPT_PATH gets written outside of cmd_refresh's
-# full static rewrite, since most hook events (PreToolUse, Stop, Notification)
-# never go through cmd_refresh at all.
-persist_transcript_path() {
-  local RENDER_PID="$1" f="$ROOT_DATA_DIR/$RENDER_PID/static.env"
-  [ -n "$ADAPTER_TRANSCRIPT_PATH" ] && [ -f "$f" ] || return 0
-  local line
-  printf -v line 'TRANSCRIPT_PATH=%q' "$ADAPTER_TRANSCRIPT_PATH"
-  grep -qxF "$line" "$f" 2>/dev/null && return 0
-  { grep -v '^TRANSCRIPT_PATH=' "$f" 2>/dev/null; echo "$line"; } > "$f.tmp" && mv "$f.tmp" "$f"
-}
-
 # Whether this invocation's agent still has work outstanding (e.g. Claude
 # subagents still running when its Stop fires). Asked only for a Finished
-# request; the adapter answers from its own hook payload (and may use the
-# stored transcript path). 0 = still pending, 1 = nothing outstanding.
+# request; the adapter answers from its own hook payload (its argument is the
+# invoking hook's transcript path, never stored). 0 = still pending, 1 = nothing outstanding.
 has_pending_work() { adapter_has_pending_work "$1"; }
 
 read_and_export_state() {
@@ -289,14 +338,13 @@ resolve_client_tty() {
   fi
   # Fall back to the PID-based lookup whenever the tmux-based one above didn't
   # produce a tty - not only when SESSION_TMUX_SESSION was unset (this used to
-  # be an elif). A stale SESSION_TMUX_SESSION - e.g. after a
-  # `tmux rename-session` before this session's static.env got refreshed, see
-  # cmd_refresh - makes `tmux list-clients -t <stale name>` fail silently,
-  # which previously left CLIENT_TTY empty with no recovery.
-  if [ -z "$CLIENT_TTY" ] && [ -n "$SHELL_PID" ] && [ "$SHELL_PID" != "-" ]; then
+  # be an elif). A tmux session that vanished between derive_session_context
+  # and here makes `tmux list-clients -t <name>` fail silently, which would
+  # otherwise leave CLIENT_TTY empty with no recovery.
+  if [ -z "$CLIENT_TTY" ] && [[ "${RENDER_PID:-}" =~ ^[0-9]+$ ]]; then
     # "ps -o tty=" works on both macOS (BSD ps) and Linux (GNU ps); /proc doesn't exist on macOS.
     local _tty_name
-    _tty_name=$(ps -o tty= -p "$SHELL_PID" 2>/dev/null | tr -d ' ')
+    _tty_name=$(ps -o tty= -p "$RENDER_PID" 2>/dev/null | tr -d ' ')
     [ -n "$_tty_name" ] && [ "$_tty_name" != "??" ] && CLIENT_TTY="/dev/$_tty_name"
   fi
   export CLIENT_TTY
@@ -409,14 +457,14 @@ cmd_refresh() {
   local session_dir="$ROOT_DATA_DIR/$RENDER_PID"
   local invocation_agent_type="$INVOKING_AGENT_TYPE"
   local invocation_session_id="$INVOKING_SESSION_ID"
-  local invocation_agent_wd="$INVOKING_AGENT_WD"
-  local invocation_agent_pid="$INVOKING_AGENT_PID"
   log "$RENDER_PID" "refresh"
 
-  read_and_export_static "$RENDER_PID"
+  load_static "$RENDER_PID"
   local disk_session_id="$AGENT_SESSION_ID"
 
-  # 1. We are NOT refreshing the current PID ? --> Wipe if Dead Session
+  # 1. We are NOT refreshing the current PID ? --> Wipe if Dead Session.
+  # The key is the directory name (the pane's root shell PID): nothing in
+  # static.env is needed to prune.
   if [ "$RENDER_PID" != "$CURRENT_PID" ]; then
     if ! kill -0 "$RENDER_PID" 2>/dev/null; then
       log "$RENDER_PID" "PRUNED dead"
@@ -424,14 +472,15 @@ cmd_refresh() {
       return
     fi
 
-  # 2. We are refreshing the current PID ? --> Refresh agent/tmux-pane statics
+  # 2. We are refreshing the current PID ? --> Refresh the agent identity.
   #
   # `refresh --all` calls cmd_refresh once per session dir, but from a SINGLE
   # process - so $PWD / $TMUX_PANE / $CLAUDE_CODE_SESSION_ID always describe
   # whichever session happened to trigger the loop, never the RENDER_PID
   # currently being iterated. Applying them to another session's PID would
-  # silently corrupt that session's agent metadata or SESSION_TMUX_PANE
-  # with the invoker's own - so 2.1/2.2 below must stay gated to CURRENT_PID.
+  # silently corrupt that session's agent identity with the invoker's own -
+  # so 2.1 below must stay gated to CURRENT_PID (derive_session_context
+  # applies the same rule to the working directory and agent PID).
   else
     # 2.1 If the adapter supplied a session id, detect reuse of the shell and
     # refresh agent metadata without teaching the core any native hook format.
@@ -439,61 +488,32 @@ cmd_refresh() {
       if [ -n "$disk_session_id" ] && [ "$disk_session_id" != "$invocation_session_id" ]; then
         log "$RENDER_PID" "stale session (old agent_session_id=$disk_session_id), wiping"
         rm -rf "$session_dir"
-        read_and_export_static "$RENDER_PID" # Reset statics
+        load_static "$RENDER_PID" # Reset statics
       fi
       AGENT_TYPE="$invocation_agent_type"
       load_adapter "$AGENT_TYPE"
       AGENT_SESSION_ID="$invocation_session_id"
-      AGENT_PID="${invocation_agent_pid:-$(adapter_resolve_agent_pid "$RENDER_PID")}"
-      AGENT_WD="${invocation_agent_wd:-$PWD}"
       SESSION_NAME="$(adapter_resolve_session_name "$AGENT_SESSION_ID")"
     fi
-    # 2.2 If we have TMUX_PANE loaded by Tmux, refresh it
-    if [ -n "$TMUX_PANE" ]; then
-        SESSION_TMUX_PANE="$TMUX_PANE"
-    fi
   fi
 
-  # 3. Re-derive SESSION_TMUX_SESSION/WINDOW from SESSION_TMUX_PANE, for ANY
-  # RENDER_PID - including under `refresh --all`, unlike 2.1/2.2 above. This is
-  # safe because SESSION_TMUX_PANE at this point is either RENDER_PID's own
-  # value loaded from disk by read_and_export_static (top of this function),
-  # or, for CURRENT_PID, just-refreshed in 2.2 - either way it's the correct
-  # pane for THIS session, never the invoker's. tmux pane IDs (%N) are global
-  # identifiers any process can query regardless of who's asking, so this is
-  # what keeps SESSION_TMUX_SESSION/WINDOW from going stale after a
-  # `tmux rename-session`. Before this was pulled out of the CURRENT_PID-only
-  # branch, only CURRENT_PID's session/window ever got re-derived, so every
-  # OTHER session's tmux-based renderers (terminal-title, sound-bell,
-  # sound-tts - anything going through resolve_client_tty) would silently stop
-  # working after a rename, since `tmux list-clients -t <stale name>` fails
-  # with no fallback (see notify.log investigation, SHELL_PID 78830, 2026-08-18).
-  if [ -n "$SESSION_TMUX_PANE" ]; then
-    SESSION_TMUX_SESSION=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#S' 2>/dev/null)
-    SESSION_TMUX_WINDOW=$(tmux display-message -t "$SESSION_TMUX_PANE" -p '#{window_id}' 2>/dev/null)
-  fi
+  # 3. Derive pane, tmux window/session, working directory and agent PID now,
+  # for ANY RENDER_PID - including under `refresh --all`. They are never
+  # stored (v5.15): a stored SESSION_TMUX_SESSION used to go stale after a
+  # `tmux rename-session`, which silently broke every tmux-based renderer of
+  # the other sessions (notify.log investigation, shell PID 78830, 2026-08-18).
+  derive_session_context "$RENDER_PID"
+  export SESSION_DATA_DIR AGENT_TYPE AGENT_SESSION_ID AGENT_WD AGENT_PID SESSION_NAME SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION
 
-  # 4. Write on Disk
-  if [ "$RENDER_PID" = "$CURRENT_PID" ] && [ -n "$ADAPTER_TRANSCRIPT_PATH" ]; then
-    TRANSCRIPT_PATH="$ADAPTER_TRANSCRIPT_PATH"
-  fi
+  # 4. Write on Disk: only agent-notify's own facts (see load_static). Every
+  # value is %q-escaped: the file is sourced, and a value with a space used to
+  # load as empty.
   mkdir -p "$session_dir"
-  f="$session_dir/static.env"
-  # Every value is %q-escaped: the file is sourced, and a tmux session name
-  # with a space ("WhatsApp skill") used to load as empty.
   {
-    printf 'TIMESTAMP=%q\n' "$(date '+%Y-%m-%dT%H:%M:%S')"
-    printf 'SHELL_PID=%q\n' "$RENDER_PID"
     printf 'AGENT_TYPE=%q\n' "$AGENT_TYPE"
     printf 'AGENT_SESSION_ID=%q\n' "$AGENT_SESSION_ID"
-    printf 'AGENT_WD=%q\n' "$AGENT_WD"
-    printf 'AGENT_PID=%q\n' "$AGENT_PID"
     printf 'SESSION_NAME=%q\n' "$SESSION_NAME"
-    printf 'SESSION_TMUX_PANE=%q\n' "$SESSION_TMUX_PANE"
-    printf 'SESSION_TMUX_WINDOW=%q\n' "$SESSION_TMUX_WINDOW"
-    printf 'SESSION_TMUX_SESSION=%q\n' "$SESSION_TMUX_SESSION"
-    printf 'TRANSCRIPT_PATH=%q\n' "$TRANSCRIPT_PATH"
-  } > "$f"
+  } > "$session_dir/static.env"
 
   # 5. Refresh Renderers. Raw (possibly empty) state, deliberately not defaulted -
   # see AGENT_STATE_DEFAULT's comment: this is the automatic path, and a fresh
@@ -520,6 +540,7 @@ cmd_status() {
   printf "  AGENT_TYPE    %s\n" "${AGENT_TYPE:-(none)}"
   printf "  SESSION_ID    %s\n" "${AGENT_SESSION_ID:-(none)}"
   printf "  AGENT_WD      %s\n" "${AGENT_WD:-(none)}"
+  [ -n "$AGENT_PID" ] || AGENT_PID="$(adapter_resolve_agent_pid "$RENDER_PID")"
   printf "  AGENT_PID     %s\n" "${AGENT_PID:-(none)}"
   printf "  SESSION_NAME  %s\n" "${SESSION_NAME:-(none)}"
   printf "  TMUX_SESSION  %s\n" "${SESSION_TMUX_SESSION:-(none)}"
@@ -571,14 +592,13 @@ cmd_update_state() {
   esac
   [ ! -d "$ROOT_DATA_DIR/$RENDER_PID" ] && cmd_refresh "$RENDER_PID"
   [ -z "$CMD_ARG2" ] && { echo "Usage: notify update <AGENT_STATE|USER_STATE> <value> [--all]"; exit 1; }
-  persist_transcript_path "$RENDER_PID"
   # Don't report Stop's "the main turn ended" as Finished while the agent's
   # dispatched work (Claude subagents) is still running. Nothing is stored:
   # the agent's next turn (Claude wakes the parent when a subagent ends) sends
   # its own Working and Finished. See HISTORY.md ("Subagent completion tracking").
   if [ "$CMD_ARG1" = "AGENT_STATE" ] && [ "$CMD_ARG2" = "Finished" ]; then
-    read_and_export_static "$RENDER_PID"
-    if has_pending_work "$TRANSCRIPT_PATH"; then
+    load_static "$RENDER_PID"
+    if has_pending_work "$ADAPTER_TRANSCRIPT_PATH"; then
       log "$RENDER_PID" "update AGENT_STATE Finished deferred (subagents still running)"
       say "AGENT_STATE=Finished deferred: subagents still running (session $RENDER_PID)"
       return

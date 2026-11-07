@@ -14,13 +14,14 @@ claude plugin validate release
 git diff --check
 ```
 
-All `tests/test_*.sh` scripts are isolated from real runtime state (throwaway `$HOME`/root-data
+All `tests/test_*.sh` scripts are isolated from real runtime state (and, since v5.15, `tests/lib/test_helpers.sh` unsets `$TMUX`/`$TMUX_PANE`/`CLAUDE_CODE_SESSION_ID`, points `TMUX_TMPDIR` at a test-only socket folder and `AGENT_TRACKER_HOME` at a missing one, so a run started inside a live tmux pane or Claude session never touches them) (throwaway `$HOME`/root-data
 dirs, stub `tmux`/`claude`/`codex` binaries where needed) and are end-to-end scenarios, not a
 branch-by-branch unit-test decomposition — see `tests/AGENTS.md` for the full map and rationale.
 
 | File | Scenarios |
 |---|---|
 | `test_framework.sh` | Adapter selection (generic/codex/claude) × full state lifecycle, `USER_STATE` reset/`OnHold`/`Acknowledged` guardrails, `CLAUDE_STATE` v4 alias, tmux popup PID targeting + idempotency, absolute-path use in every `tmux-hooks.conf` `run-shell` line, `refresh --all` isolation including a later-visited invoker and detached refresh after status, all four renderers' literal output, a session-disabled renderer being skipped by the core dispatcher |
+| `test_derived_context.sh` | v5.15 lookups on a real tmux server in a test-only socket folder: pane, tmux session (name with a space) and directory derived by shell PID with no agent-tracker, pane colored through it; a tmux rename seen with no refresh; a v5.14 `static.env` with stale copies ignored, then rewritten to three keys; agent-tracker's `cwd`/`pid` used, a malformed file and an unsafe session id ignored; a shell that is not the pane root (its own `$TMUX_PANE`, else agent-tracker's `pane_id`, a pane tmux no longer has refused); dead shells pruned by folder name |
 | `test_subagent_tracking.sh` | Stop-hook payloads (`background_tasks`) for the live T1/T2/T3/T5 shapes: one subagent, three staggered ones, a silent parent (refresh never invents Finished), a hung subagent then `idle_prompt`, subagent tool calls during a deferral; every payload variant (empty, missing, null, wrong type, junk entries, shells only, ended subagents in 5 statuses, unknown types, malformed, empty stdin, 400 entries); no stdin, a pipe that never closes (returns within the 2 s hook timeout), timing; a first event with no session dir and a renderer that reads stdin; only Finished deferred; OnHold kept; manual Finished never deferred; generic/codex adapters never defer; a v5.11 leftover `pending_finish` ignored |
 | `test_log_cap.sh` | `notify.log` cap: over the cap it is renamed to `notify.log.1` unchanged and a second rotation replaces it (two files at most); under the cap untouched; never rotated between debounced refreshes; a non-numeric cap or a missing log is harmless; the real 100 MB default on a 106 MB file, rotated within a second while the hook returns at once |
 | `test_tmux_focus.sh` | `user-focus` pane switching: focused pane → `Acknowledged`, other known panes → `Seen`, a plain shell pane untouched, `OnHold`/`Acknowledged` immune to the automatic path, empty `$TMUX_PANE` is a no-op |

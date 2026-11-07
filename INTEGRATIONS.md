@@ -29,7 +29,7 @@ notify session-start
 ```
 
 Use the same context for later lifecycle calls when the hook process cannot be resolved back to the
-same root shell. In the normal shell/tmux case, persisted metadata and PID discovery are enough:
+same root shell. In the normal shell/tmux case, PID discovery is enough. Only the adapter, the session id and the title are stored (v5.15): `NOTIFY_AGENT_WD` and `NOTIFY_AGENT_PID` apply to the call that carries them with the same session id; otherwise the working directory comes from agent-tracker (when installed) or tmux's `pane_current_path` ("Session fields: stored or derived" below):
 
 ```bash
 NOTIFY_AGENT_TYPE=generic notify event Working
@@ -45,7 +45,7 @@ Variables:
 | `NOTIFY_AGENT_WD` | Agent working directory |
 | `NOTIFY_AGENT_PID` | Native agent process PID, if useful diagnostically |
 | `NOTIFY_SESSION_NAME` | Optional human-readable title |
-| `NOTIFY_TRANSCRIPT_PATH` | Optional native transcript path, stored as `TRANSCRIPT_PATH` and passed to `adapter_has_pending_work` |
+| `NOTIFY_TRANSCRIPT_PATH` | Optional native transcript path of this hook call, passed to `adapter_has_pending_work`; not stored |
 | `NOTIFY_RENDER_PID` | Root shell PID when process-tree/tmux discovery is unavailable |
 | `NOTIFY_ROOT_DATA_DIR` | Test/advanced override for runtime state root |
 | `NOTIFY_CONFIG_DIR` | Test/advanced override for persistent configuration root |
@@ -65,7 +65,8 @@ adapter_has_pending_work <transcript-path>
 ```
 
 - `adapter_load_context` may set `AGENT_SESSION_ID`, `AGENT_WD`, `AGENT_PID`, and
-  `ADAPTER_TRANSCRIPT_PATH`.
+  `ADAPTER_TRANSCRIPT_PATH`. These describe the invoking call only: the core stores the session id,
+  and uses the directory and PID only for that same session ("Session fields: stored or derived" below).
 - PID and session-name resolvers print their value or print nothing.
 - Optional `adapter_refresh_session_name` updates the loaded session's `SESSION_NAME` before
   status output and changed-agent-state rendering. The default is a no-op; adapters can cache
@@ -85,6 +86,26 @@ snapshot; reading a neighboring session must never replace the caller's identity
 Renderers receive only normalized fields such as `AGENT_TYPE`, `AGENT_SESSION_ID`, `AGENT_WD`,
 `AGENT_PID`, `SESSION_NAME`, `AGENT_STATE`, and `USER_STATE`. They must not inspect native hook
 input, native environment variables, or transcript formats.
+
+## Session fields: stored or derived
+
+`/tmp/agent-notify-$USER/<shell-pid>/static.env` keeps only what agent-notify needs and nothing else gives; every other field is derived when it is read, by `derive_session_context` in `release/notify`. agent-tracker is optional: without it, tmux and the hook's own context give everything renderers use.
+
+| Field (v5.14 `static.env`) | Read by, when | Now | Source at that moment |
+|---|---|---|---|
+| `SHELL_PID` | `resolve_client_tty` fallback (`ps -o tty=`), each render | dropped | `RENDER_PID` (the folder name) |
+| `SESSION_TMUX_PANE` | `tmux-pane-bg`, `sound-tts` (pane title), each render | dropped | `tmux list-panes -a`: the pane whose `pane_pid` is `RENDER_PID`; else the invoking process's `$TMUX_PANE` (its own shell only); else agent-tracker's `pane_id`, if tmux still has that pane |
+| `SESSION_TMUX_SESSION` | `terminal-title`, `resolve_client_tty`, each render | dropped | same tmux line (`session_name`); a copy went stale on `tmux rename-session` (2026-08-18) |
+| `SESSION_TMUX_WINDOW` | no renderer (renderer contract only) | dropped | same tmux line (`window_id`) |
+| `AGENT_WD` | `sound-tts` name fallback, `status` | dropped | the invoking hook's context (`CLAUDE_PROJECT_DIR`, Codex stdin `cwd`) when it is this very session; else agent-tracker's `cwd`; else tmux `pane_current_path` |
+| `AGENT_PID` | `status` only | dropped | invoking context; else agent-tracker's `pid` if alive; `status` then asks the adapter's process-tree lookup |
+| `TRANSCRIPT_PATH` | `adapter_has_pending_work` argument; no adapter reads it since v5.12 | dropped | the invoking hook's own `transcript_path` (`ADAPTER_TRANSCRIPT_PATH`) |
+| `TIMESTAMP` | nobody | dropped | `notify.log` has the times |
+| `AGENT_TYPE` | `load_adapter` for neighbor sessions (`--all`, `user-focus`, the tmux menu), `status` | **kept** | nothing else says which adapter owns a shell; agent-tracker does not see Codex panes |
+| `AGENT_SESSION_ID` | `cmd_refresh` (a new agent session in the same shell wipes the old state), title lookup, agent-tracker lookup | **kept** | the previous id of this shell is agent-notify's own state: the hook gives only the new one |
+| `SESSION_NAME` | `sound-tts`, `status` | **kept** (cache) | Claude: a Python scan of the transcript; generic: given once at `session-start`; Codex refreshes its own cache |
+
+Derived fields are exported to renderers under the same names (`renderers.d/template/main`). Old files are read without their dropped keys and rewritten with three keys at the next refresh (at most 300 s).
 
 ## Claude integration
 

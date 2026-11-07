@@ -4,7 +4,7 @@ End-to-end scenarios in `tests/`, not a unit-test decomposition of every branch.
 is one test *scenario* — a realistic sequence of calls against `release/notify` (or `install.sh`)
 that bundles several related assertions along the way, the same shape `test_framework.sh`'s
 original `test_lifecycle`/`test_popup_targeting`/`test_refresh_all_isolation`/`test_renderers`
-already used. All 19 scenarios below are implemented; this file stays as the map explaining what
+already used. All 20 scenarios below are implemented; this file stays as the map explaining what
 each one covers and why, for whoever touches these tests next.
 
 ## Why scenarios, not unit tests
@@ -54,9 +54,9 @@ so it doesn't hardcode how many such lines the file has.
 
 ### 3. [done] `refresh --all` session isolation — `test_refresh_all_isolation`
 
-Two sessions refreshed together must not leak adapter/transcript metadata into each other.
-Extended to also assert `AGENT_PID` and `SESSION_NAME` stay isolated, not just
-`AGENT_TYPE`/`TRANSCRIPT_PATH`. The invoker is also tested as a later member of
+Two sessions refreshed together must not leak adapter metadata into each other: `AGENT_TYPE`,
+`AGENT_SESSION_ID` and `SESSION_NAME` stay isolated, v5.14 keys are dropped by the rewrite, and
+`status --all` shows the invoker's directory and agent PID for its own session only (v5.15). The invoker is also tested as a later member of
 the sweep (after loading another session), and a detached periodic sweep after
 `status --all` must retain the original caller rather than the last exported session.
 
@@ -222,6 +222,13 @@ refreshes); a non-numeric cap and a missing log (no rotation, no error); and the
 testable end to end: the hook call appends lines first.
 
 ---
+
+### 20. [done] Derived pane, directory and agent PID (v5.15) — `tests/test_derived_context.sh`
+
+The only file that starts a real tmux server (in its own `TMUX_TMPDIR`, killed on exit). Checks the
+lookups that replaced the `static.env` copies (INTEGRATIONS.md, "Session fields: stored or derived"): tmux by shell PID with
+no agent-tracker, a rename seen at once, stale v5.14 copies ignored, agent-tracker's `cwd`/`pid`/
+`pane_id` used when present and safe, dead shells pruned by folder name.
 
 ## File layout
 
