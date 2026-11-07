@@ -88,9 +88,9 @@ manifest or hook-command change.
     └── renderers.d/<renderer>/settings.json
 ```
 
-`RENDER_PID` is the pane's root shell PID. Static metadata is normalized as `AGENT_TYPE`,
-`AGENT_SESSION_ID`, `AGENT_WD`, `AGENT_PID`, `SESSION_NAME`, and tmux identifiers. State is
-`AGENT_STATE` plus `USER_STATE`.
+`RENDER_PID` is the pane's root shell PID: the folder name, and the key for pruning dead shells (`kill -0`). `state.env` holds agent-notify's own state, `AGENT_STATE` plus `USER_STATE`.
+
+Since v5.15 (agent-tracker v1, 2026-11-07) `static.env` keeps only `AGENT_TYPE`, `AGENT_SESSION_ID` and `SESSION_NAME`: what agent-notify needs and nothing else gives. Pane, tmux window/session, working directory and agent PID are derived when read (`derive_session_context` in `release/notify`: tmux by shell PID, the hook's own context, agent-tracker's `last_seen.json` when installed). Never store a copy of them again, and never make agent-notify require agent-tracker. Field table (who reads each field, when, from where): [INTEGRATIONS.md](INTEGRATIONS.md), "Session fields: stored or derived".
 
 ### Accepted trust boundary
 

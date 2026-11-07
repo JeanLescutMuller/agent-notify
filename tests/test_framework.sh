@@ -53,9 +53,12 @@ test_lifecycle() {
   if [ "$adapter" = "codex" ]; then
     assert_file_contains "$root/$render_pid/static.env" "AGENT_SESSION_ID=codex-test-session" \
       "codex adapter persists the wrapper-provided session id"
-    assert_file_contains "$root/$render_pid/static.env" "AGENT_WD=$PROJECT_DIR" \
-      "codex adapter persists the wrapper-provided working directory"
   fi
+  # v5.15: static.env keeps only agent-notify's own facts; the working
+  # directory comes from the hook's own context when it is read.
+  [ "$(grep -c . "$root/$render_pid/static.env")" -eq 3 ] || fail "$adapter static.env holds only AGENT_TYPE, AGENT_SESSION_ID, SESSION_NAME"
+  run_notify "$root" "$adapter" "$render_pid" status > "$TEST_ROOT/status-$adapter"
+  grep -qxF "  AGENT_WD      $PROJECT_DIR" "$TEST_ROOT/status-$adapter" || fail "$adapter working directory derived from the hook context"
 
   run_notify "$root" "$adapter" "$render_pid" event Working
   assert_file_contains "$root/$render_pid/state.env" "AGENT_STATE=Working" "$adapter Working state"
@@ -154,20 +157,25 @@ test_refresh_all_isolation() {
     bash "$NOTIFY" refresh --all
 
   assert_file_contains "$root/$first/static.env" "AGENT_TYPE=codex" "refresh-all preserves first adapter"
-  assert_file_contains "$root/$first/static.env" "TRANSCRIPT_PATH=/tmp/codex-one.jsonl" "refresh-all preserves first transcript"
   assert_file_contains "$root/$second/static.env" "AGENT_TYPE=claude" "refresh-all preserves second adapter"
-  assert_file_contains "$root/$second/static.env" "TRANSCRIPT_PATH=/tmp/claude-two.jsonl" "refresh-all preserves second transcript"
+  assert_file_contains "$root/$first/static.env" "AGENT_SESSION_ID=codex-one" "refresh-all preserves first session id"
+  assert_file_contains "$root/$second/static.env" "AGENT_SESSION_ID=claude-two" "refresh-all preserves second session id"
   # Only CURRENT_PID's own agent metadata may be refreshed from the invoking
-  # process's own $PWD/env - a `refresh --all` sweep must not overwrite every
-  # OTHER session's AGENT_PID/SESSION_NAME with whatever the invoker's
-  # process happens to report either.
-  assert_file_contains "$root/$first/static.env" "AGENT_PID=101" "refresh-all preserves first AGENT_PID"
+  # process's own env - a `refresh --all` sweep must not overwrite every
+  # OTHER session's SESSION_NAME with whatever the invoker reports.
   assert_file_contains "$root/$first/static.env" "SESSION_NAME=codex-one-name" "refresh-all preserves first SESSION_NAME"
-  assert_file_contains "$root/$second/static.env" "AGENT_PID=202" "refresh-all preserves second AGENT_PID"
   assert_file_contains "$root/$second/static.env" "SESSION_NAME=claude-two-name" "refresh-all preserves second SESSION_NAME"
-  # A value with a space (e.g. tmux session "WhatsApp skill") must load back
-  # intact when static.env is sourced, not as empty plus a stray command.
-  [ "$(bash -c 'source "$1" 2>&1; printf %s "$AGENT_WD"' _ "$root/$first/static.env")" = "/tmp/codex one" ] \
+  # v5.14 files are migrated by the rewrite: the copied keys are dropped.
+  local key
+  for key in SHELL_PID AGENT_WD AGENT_PID SESSION_TMUX_PANE SESSION_TMUX_WINDOW SESSION_TMUX_SESSION TRANSCRIPT_PATH TIMESTAMP; do
+    grep -q "^$key=" "$root/$first/static.env" "$root/$second/static.env" && fail "refresh-all drops the v5.14 key $key"
+  done
+  # A value with a space (e.g. a title) must load back intact when static.env
+  # is sourced, not as empty plus a stray command.
+  printf '%s\n' 'AGENT_TYPE=codex' 'AGENT_SESSION_ID=codex-one' 'SESSION_NAME=codex\ one\ name' > "$root/$first/static.env"
+  HOME="$TEST_ROOT/home" NOTIFY_ROOT_DATA_DIR="$root" NOTIFY_CONFIG_DIR="$TEST_ROOT/config" \
+    bash "$NOTIFY" refresh --all
+  [ "$(bash -c 'source "$1" 2>&1; printf %s "$SESSION_NAME"' _ "$root/$first/static.env")" = "codex one name" ] \
     || fail "static.env value with a space survives write and source"
 
   # The invoker must itself be in the sweep, AFTER another session. Otherwise
@@ -176,20 +184,22 @@ test_refresh_all_isolation() {
   current=$(printf '%s\n' "$first" "$second" | LC_ALL=C sort | tail -1)
   neighbor=$(printf '%s\n' "$first" "$second" | LC_ALL=C sort | head -1)
   cp "$root/$neighbor/static.env" "$TEST_ROOT/neighbor-before"
-  HOME="$TEST_ROOT/home" NOTIFY_ROOT_DATA_DIR="$root" NOTIFY_CONFIG_DIR="$TEST_ROOT/config" \
-    NOTIFY_RENDER_PID="$current" NOTIFY_AGENT_TYPE=generic \
-    NOTIFY_AGENT_SESSION_ID=current-session NOTIFY_AGENT_WD=/tmp/current \
-    NOTIFY_AGENT_PID=9191 NOTIFY_SESSION_NAME=current-name \
-    NOTIFY_TRANSCRIPT_PATH=/tmp/current.jsonl \
-    bash "$NOTIFY" refresh --all
+  local invoker_env=(HOME="$TEST_ROOT/home" NOTIFY_ROOT_DATA_DIR="$root" NOTIFY_CONFIG_DIR="$TEST_ROOT/config"
+    NOTIFY_RENDER_PID="$current" NOTIFY_AGENT_TYPE=generic
+    NOTIFY_AGENT_SESSION_ID=current-session NOTIFY_AGENT_WD=/tmp/current
+    NOTIFY_AGENT_PID=9191 NOTIFY_SESSION_NAME=current-name
+    NOTIFY_TRANSCRIPT_PATH=/tmp/current.jsonl)
+  env "${invoker_env[@]}" bash "$NOTIFY" refresh --all
   assert_file_contains "$root/$current/static.env" 'AGENT_TYPE=generic' 'sweep keeps the invoking adapter'
   assert_file_contains "$root/$current/static.env" 'AGENT_SESSION_ID=current-session' 'sweep keeps the invoking session id'
-  assert_file_contains "$root/$current/static.env" 'AGENT_WD=/tmp/current' 'sweep keeps the invoking directory'
-  assert_file_contains "$root/$current/static.env" 'AGENT_PID=9191' 'sweep keeps the invoking agent PID'
   assert_file_contains "$root/$current/static.env" 'SESSION_NAME=current-name' 'sweep keeps the invoking name'
-  assert_file_contains "$root/$current/static.env" 'TRANSCRIPT_PATH=/tmp/current.jsonl' 'sweep keeps the invoking transcript'
-  diff <(sed '/^TIMESTAMP=/d' "$TEST_ROOT/neighbor-before") \
-    <(sed '/^TIMESTAMP=/d' "$root/$neighbor/static.env") || fail 'sweep changes only its invoking session identity'
+  grep -q '^TRANSCRIPT_PATH=' "$root/$current/static.env" && fail 'the hook transcript path is not stored'
+  diff "$TEST_ROOT/neighbor-before" "$root/$neighbor/static.env" || fail 'sweep changes only its invoking session identity'
+  # The invoker's working directory and agent PID describe its own session
+  # only: `status --all` derives them per session, never copying the caller's.
+  env "${invoker_env[@]}" bash "$NOTIFY" status --all > "$TEST_ROOT/status-all"
+  [ "$(grep -cxF '  AGENT_WD      /tmp/current' "$TEST_ROOT/status-all")" -eq 1 ] || fail 'invoking directory shown for its own session only'
+  [ "$(grep -cxF '  AGENT_PID     9191' "$TEST_ROOT/status-all")" -eq 1 ] || fail 'invoking agent PID shown for its own session only'
 
   # A detached periodic sweep must also retain the original invocation, not
   # re-import metadata exported by the last STATUS renderer in the parent.
@@ -201,11 +211,11 @@ test_refresh_all_isolation() {
     bash "$NOTIFY" status --all > "$TEST_ROOT/background-status"
   local attempt
   for attempt in {1..50}; do
-    grep -q '^AGENT_PID=8181$' "$root/$neighbor/static.env" 2>/dev/null && break
+    grep -q '^AGENT_SESSION_ID=background-caller$' "$root/$neighbor/static.env" 2>/dev/null && break
     sleep 0.1
   done
   assert_file_contains "$root/$neighbor/static.env" 'AGENT_SESSION_ID=background-caller' 'detached sweep keeps invoking session id'
-  assert_file_contains "$root/$neighbor/static.env" 'AGENT_PID=8181' 'detached sweep keeps invoking PID before STATUS changed exports'
+  assert_file_contains "$root/$neighbor/static.env" 'SESSION_NAME=background-name' 'detached sweep keeps invoking name before STATUS changed exports'
   assert_file_contains "$root/$current/static.env" 'AGENT_SESSION_ID=current-session' 'detached sweep preserves its other session'
   pass "refresh --all keeps sessions isolated"
 }

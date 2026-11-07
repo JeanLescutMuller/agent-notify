@@ -95,8 +95,7 @@ environment variables; agent-native parsing belongs in `adapters.d/`.
 - State transitions are not yet locked against concurrent hook processes.
 - Runtime `static.env` and `state.env` files are sourced as trusted shell code. This is an accepted
   single-user limitation, not safe for untrusted adapter metadata.
-- Claude's subagent completion handling currently uses a bounded transcript scan pending validation
-  of newer documented lifecycle hooks.
+- Each shell's `static.env` keeps only the adapter, the agent session id and its title (v5.15). Pane, tmux session, working directory and agent PID are looked up when needed: from tmux, from the hook's own input, and from agent-tracker's `last_seen.json` when agent-tracker is installed (optional; agent-notify works without it). Field table: [INTEGRATIONS.md](INTEGRATIONS.md), "Session fields: stored or derived".
 
 Planned work: Todoist, tasks with `Repo: agent-notify` ([todo.html](todo.html)); resolved issues and their rationale: [HISTORY.md](HISTORY.md), and [TESTING.md](TESTING.md) for regression
 checks.

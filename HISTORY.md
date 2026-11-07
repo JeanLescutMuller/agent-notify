@@ -4,6 +4,8 @@ What was fixed, why, and how it is tested; cited by code comments and tests. Ope
 
 ## Resolved history
 
+- **Copies of facts others already give (v5.15, 2026-11-07, agent-tracker v1):** `static.env` held 11 fields per shell; 8 were copies of what tmux, the hook's own input or agent-tracker's `last_seen.json` give when they are read, and one copy (`SESSION_TMUX_SESSION`) had already gone stale after a `tmux rename-session` (2026-08-18). v5.15 keeps `AGENT_TYPE`, `AGENT_SESSION_ID` and `SESSION_NAME` and derives the rest in `derive_session_context` (one `tmux list-panes -a` per render; one `jq` on `last_seen.json` only when agent-tracker wrote one). agent-notify does not depend on agent-tracker: tmux by shell PID gives the pane, so colors are set without it. Field table: INTEGRATIONS.md, "Session fields: stored or derived". Tested by `tests/test_derived_context.sh` and `test_refresh_all_isolation`.
+
 - **`notify.log` never trimmed (v5.13-v5.14, 2026-11-03):** the shared log grew to 86 MB / 1.2 M
   lines in 18 days (first line 2026-10-16, ~5 MB/day). `trim_log` runs at the start of the
   detached debounced refresh (at most every 300 s while agents run, never on a hook's critical

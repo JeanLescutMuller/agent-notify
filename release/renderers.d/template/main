@@ -20,8 +20,11 @@
 #   AGENT_TYPE            Adapter name                 claude|generic                             no
 #   AGENT_SESSION_ID      Native agent session id      44112769-0dc8-489b-b5dc-56e1f4eab079       ⚠️ yes
 #   AGENT_WD              Working directory            /home/user/project                         ⚠️ yes
-#   AGENT_PID             Agent process PID            458808                                     ⚠️ yes
+#   AGENT_PID             Agent process PID            458808                                     ⚠️ yes (usually, for a neighbor session)
 #   SESSION_NAME          Adapter-resolved title       Refactor notifications                     ⚠️ yes
+#
+# SESSION_TMUX_*, AGENT_WD and AGENT_PID are derived at each render (tmux,
+# the hook's own context, agent-tracker when installed), never stored (v5.15).
 #
 # Read your renderer's settings from RENDERER_SETTINGS with:
 #   echo "$RENDERER_SETTINGS" | jq -r '."<renderer-name>".<key>'
