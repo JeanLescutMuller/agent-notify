@@ -1,11 +1,10 @@
 # agent-notify
 
-Agent-neutral terminal notifications for concurrent coding sessions. A small lifecycle API records
-agent and user state; independent renderers turn that state into tmux pane colors, terminal-title
-icons, bells, and optional macOS text-to-speech. The CLI it ships is called `notify`.
+**See at a glance which of your Claude Code (or other coding agent) sessions is working, done, or waiting for you, when you run several at once in tmux.**
 
-Claude Code support is included, but the core does not depend on Claude's state names or hook
-format. Other agents can call the same CLI through the generic adapter or add a native adapter.
+Agent-neutral terminal notifications for concurrent coding sessions. A small lifecycle API records agent and user state; independent renderers turn that state into tmux pane colors, terminal-title icons, bells, and optional macOS text-to-speech. The CLI it ships is called `notify`.
+
+Claude Code support is included, but the core does not depend on Claude's state names or hook format. Other agents can call the same CLI through the generic adapter or add a native adapter.
 
 ## Install
 
