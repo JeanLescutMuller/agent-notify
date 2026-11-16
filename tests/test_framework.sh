@@ -253,15 +253,15 @@ test_renderers() {
   bash "$PROJECT_DIR/release/renderers.d/sound-tts/main" 2>/dev/null || fail "sound-tts executes"
   grep -aqF 'Custom=id=tts:[[volm 0.7]] renderer-test' "$tty" || fail "sound-tts writes iTerm2 sequence"
 
-  # iterm-status: one write = title, clear old OSC 7501 records, OSC 21337 dot + subtitle.
+  # iterm-status: one write = title (OSC 0), then dot + subtitle (OSC 21337).
   : > "$tty"
   bash "$PROJECT_DIR/release/renderers.d/iterm-status/main" || fail "iterm-status executes"
-  [ "$(cat "$tty")" = $'\033]0;test-session\a\033]7501;state=clear\a\033]21337;status=1 done;indicator=#00d75f;status-color=#00d75f\a' ] || \
+  [ "$(cat "$tty")" = $'\033]0;test-session\a\033]21337;status=1 done;indicator=#00d75f;status-color=#00d75f\a' ] || \
     fail "iterm-status writes the title and a green '1 done' tab status"
   : > "$tty"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Seen' > "$state_root/$render_pid/state.env"
   bash "$PROJECT_DIR/release/renderers.d/iterm-status/main" || fail "iterm-status executes on Seen"
-  [ "$(cat "$tty")" = $'\033]0;test-session\a\033]7501;state=clear\a\033]21337;status=;indicator=;status-color=\a' ] || \
+  [ "$(cat "$tty")" = $'\033]0;test-session\a\033]21337;status=;indicator=;status-color=\a' ] || \
     fail "iterm-status clears the tab status when the only pane is Seen"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Pending' > "$state_root/$render_pid/state.env"
 

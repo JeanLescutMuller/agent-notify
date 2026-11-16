@@ -14,7 +14,6 @@
 # "<state>"); no mapping (Seen, Acknowledged by default) = the pane does not
 # count. The dot takes the color of the first category in "priority" that has
 # a pane; the subtitle counts every category, e.g. "2 waiting · 1 working".
-# v5.16-v5.17 sent OSC 7501 records instead: each render still clears them.
 
 rlog() { log "${RENDER_PID:--}" "    iterm-status: $1"; }
 
@@ -63,7 +62,7 @@ render_status() {
     tab_status="status=$text;indicator=$color;status-color=$color"
   fi
   rlog "session=$tmux_session $tab_status"
-  printf '%s' "${ESC}]0;${tmux_session}${BEL}${ESC}]7501;state=clear${BEL}${ESC}]21337;${tab_status}${BEL}" > "$client_tty"
+  printf '%s' "${ESC}]0;${tmux_session}${BEL}${ESC}]21337;${tab_status}${BEL}" > "$client_tty"
 }
 
 case "$TRIGGER" in

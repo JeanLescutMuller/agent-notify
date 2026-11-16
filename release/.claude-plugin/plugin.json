@@ -1,7 +1,7 @@
 {
   "name": "notify",
   "version": "5.0.0",
-  "description": "Claude Code integration for agent-neutral terminal notifications: pane colors, tab icons, bell, and TTS. Configure with: ! notify",
+  "description": "Claude Code integration for agent-neutral terminal notifications: pane colors, iTerm2 tab dot and subtitle, bell, and TTS. Configure with: ! notify",
   "author": {
     "name": "Jean Lescut-Muller",
     "email": "jeanlescut@meta.com"
