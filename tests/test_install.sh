@@ -79,6 +79,16 @@ test_install_migration() {
   assert_log_not_contains "$TEST_ROOT/migrate-install-2.log" "migrated global settings: sound-tts" \
     "a settings file that's already present under config/ is not re-migrated"
   pass "install: old plugin-dir settings are migrated once, never re-migrated or clobbered"
+
+  # The deployed app/ (and the plugin link, now a symlink to it) hold shipped
+  # defaults only: a reinstall over an app whose default differs from the
+  # new release must not freeze that old default into config/ (v5.16 bug).
+  printf '{"Working":"X"}' > "$home/opt/agent-notify/app/renderers.d/iterm-status/settings.json"
+  HOME="$home" NOTIFY_INSTALL_CLAUDE=false NOTIFY_INSTALL_CODEX=false \
+    "$PROJECT_DIR/install.sh" >"$TEST_ROOT/migrate-install-3.log" 2>&1
+  [ ! -e "$home/opt/agent-notify/config/renderers.d/iterm-status/settings.json" ] || \
+    fail "an old deployed default is not migrated as a global override"
+  pass "install: old deployed defaults are never migrated"
 }
 
 # Fake claude/codex binaries: exercise install.sh's actual registration

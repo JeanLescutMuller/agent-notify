@@ -93,7 +93,7 @@ test_lifecycle() {
   assert_file_contains "$root/$render_pid/state.env" "AGENT_STATE=Idle" \
     "$adapter CLAUDE_STATE alias maps to AGENT_STATE"
 
-  for renderer in iterm-status sound-bell sound-tts terminal-title tmux-pane-bg; do
+  for renderer in iterm-status sound-bell sound-tts tmux-pane-bg; do
     assert_log_contains "$root/notify.log" "RENDER AGENT_STATE_UPDATE $renderer" \
       "$adapter framework dispatches $renderer"
   done
@@ -242,7 +242,7 @@ test_renderers() {
   export SESSION_TMUX_PANE="%1" SESSION_TMUX_SESSION="test-session" CLIENT_TTY="$tty"
   export AGENT_STATE="Finished" USER_STATE="Pending" AGENT_WD="$PROJECT_DIR" SESSION_NAME=""
   export TRIGGER="AGENT_STATE_UPDATE"
-  export RENDERER_SETTINGS='{"sound-bell":{"Finished":1},"sound-tts":{"Finished":0.7,"name":"renderer-test"},"terminal-title":{"Finished.Pending":"G"},"iterm-status":{"Finished.Pending":"idle"},"tmux-pane-bg":{"Finished.Pending":"#123456"}}'
+  export RENDERER_SETTINGS='{"sound-bell":{"Finished":1},"sound-tts":{"Finished":0.7,"name":"renderer-test"},"iterm-status":{"Finished.Pending":"idle"},"tmux-pane-bg":{"Finished.Pending":"#123456"}}'
   log() { printf '%s\n' "$2" >> "$TEST_ROOT/renderer.log"; }
   export -f log
 
@@ -253,19 +253,15 @@ test_renderers() {
   bash "$PROJECT_DIR/release/renderers.d/sound-tts/main" 2>/dev/null || fail "sound-tts executes"
   grep -aqF 'Custom=id=tts:[[volm 0.7]] renderer-test' "$tty" || fail "sound-tts writes iTerm2 sequence"
 
-  : > "$tty"
-  bash "$PROJECT_DIR/release/renderers.d/terminal-title/main" || fail "terminal-title executes"
-  grep -aqF 'G test-session' "$tty" || fail "terminal-title writes aggregated title"
-
   # iterm-status: one write = clear every record, then one per counting pane.
   : > "$tty"
   bash "$PROJECT_DIR/release/renderers.d/iterm-status/main" || fail "iterm-status executes"
-  [ "$(cat "$tty")" = $'\033]7501;state=clear\033\\\033]7501;state=idle:app=codex:id=pane1\033\\' ] || \
-    fail "iterm-status clears then writes one idle record for pane %1"
+  [ "$(cat "$tty")" = $'\033]0;test-session\033\\\033]7501;state=clear\033\\\033]7501;state=idle:app=codex:id=pane1\033\\' ] || \
+    fail "iterm-status writes the title, clears, then one idle record for pane %1"
   : > "$tty"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Seen' > "$state_root/$render_pid/state.env"
   bash "$PROJECT_DIR/release/renderers.d/iterm-status/main" || fail "iterm-status executes on Seen"
-  [ "$(cat "$tty")" = $'\033]7501;state=clear\033\\' ] || fail "iterm-status drops a Seen pane's record"
+  [ "$(cat "$tty")" = $'\033]0;test-session\033\\\033]7501;state=clear\033\\' ] || fail "iterm-status drops a Seen pane's record"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Pending' > "$state_root/$render_pid/state.env"
 
   bash "$PROJECT_DIR/release/renderers.d/tmux-pane-bg/main" || fail "tmux-pane-bg executes"

@@ -130,22 +130,22 @@ NOTIFY_RENDER_PID="$render_pid" notify event Idle
 
 Expected default visuals:
 
-| State | Pane background | Terminal-title icon |
+| State | Pane background | iTerm2 tab dot |
 |---|---|---|
-| `Working` | `#0a1028` | 🔵 |
-| `WaitingForUser` | `#2e2e0a` | 🟡 |
-| `Finished.Pending` | `#0a2e0a` | 🟢 |
-| `Finished.Seen` | default | ⚪ |
-| `Finished.Acknowledged` | default | no icon |
-| `Finished.OnHold` | `#200a1a` | 🟣 |
-| `Idle.Pending` | `#0a2e0a` | 🟢 |
+| `Working` | `#0a1028` | orange (working) |
+| `WaitingForUser` | `#2e2e0a` | blue (blocked) |
+| `Finished.Pending` | `#0a2e0a` | green (idle) |
+| `Finished.Seen` | default | none |
+| `Finished.Acknowledged` | default | none |
+| `Finished.OnHold` | `#200a1a` | none |
+| `Idle.Pending` | `#0a2e0a` | green (idle) |
 
 Verify the actual tmux options, independently of what the pane looks like:
 
 ```bash
 tmux show-options -p -t "$TMUX_PANE" window-style
 tmux show-options -p -t "$TMUX_PANE" window-active-style
-grep "\[$render_pid\].*terminal-title: title\|\[$render_pid\].*tmux-pane-bg:" "$log_file" | tail -20
+grep "\[$render_pid\].*iterm-status: session=\|\[$render_pid\].*tmux-pane-bg:" "$log_file" | tail -20
 ```
 
 `WaitingForUser` should ring twice and speak once; `Finished` should ring once and speak once with

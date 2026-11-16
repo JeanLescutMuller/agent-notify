@@ -27,6 +27,10 @@ trap cleanup EXIT
 migrate_global_settings() {
   local old_root="$1"
   [ -d "$old_root/renderers.d" ] || return 0
+  # The deployed app/ holds only shipped defaults, never user edits (those live
+  # in config/). Migrating from it froze every changed default as a global
+  # override (v5.16 froze terminal-title's old icons, 2026-11-16).
+  [ "$(readlink -f "$old_root")" = "$(readlink -f "$DEST" 2>/dev/null)" ] && return 0
 
   local old_file renderer default_file target
   for old_file in "$old_root"/renderers.d/*/settings.json; do
@@ -67,7 +71,6 @@ replace_with_symlink() {
 echo "==> Migrating persistent renderer settings"
 mkdir -p "$CONFIG_DIR"
 migrate_global_settings "$PLUGIN_LINK"
-migrate_global_settings "$DEST"
 
 echo "==> Deploying release/ to $DEST"
 mkdir -p "$RUNTIME_ROOT"

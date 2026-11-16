@@ -4,7 +4,7 @@
 # PermissionRequest hook fires WaitingForUser even when auto-approved within
 # seconds, with no payload signal to tell that apart from a real wait). The
 # debounce lives entirely inside the two sound renderers, not the core: a
-# WaitingForUser still writes state.env and renders terminal-title/tmux-pane-bg
+# WaitingForUser still writes state.env and renders iterm-status/tmux-pane-bg
 # immediately, only the actual ring/speak is held back and re-checked against
 # disk state before firing.
 set -euo pipefail
@@ -56,7 +56,7 @@ assert_log_contains "$ROOT_DATA_DIR/notify.log" "sound-bell: debounce ${DEBOUNCE
 assert_log_contains "$ROOT_DATA_DIR/notify.log" "sound-tts: debounce ${DEBOUNCE_SECS}s before speaking" \
   "fast-clear: sound-tts debounces instead of speaking immediately"
 
-# terminal-title/tmux-pane-bg are NOT sound renderers - they must still
+# iterm-status/tmux-pane-bg are NOT sound renderers - they must still
 # reflect WaitingForUser right away, proving the debounce is scoped to the
 # two sound renderers only, not the whole notify state.
 assert_file_contains "$ROOT_DATA_DIR/$PID_FAST/state.env" "AGENT_STATE=WaitingForUser" \

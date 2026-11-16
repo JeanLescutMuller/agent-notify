@@ -1,7 +1,8 @@
 #!/bin/bash
 # Renderer: iterm-status
-# iTerm2's native tab dot (OSC 7501 "program status"), one record per
-# notify-managed pane of the tmux session, written to the tmux client's tty.
+# The iTerm2 tab of a tmux client: the native dot (OSC 7501 "program status"),
+# one record per notify-managed pane of the tmux session, and the tab title
+# (the tmux session name, OSC 0), written to the tmux client's tty.
 #
 # Why: outside tmux, Claude Code sends OSC 7501 itself and iTerm2 draws a dot in
 # the tab (idle green, working orange, blocked blue). Inside tmux it never does:
@@ -14,6 +15,8 @@
 # record, including those of closed panes), then one record per pane whose
 # state maps to working|blocked|idle. A pane that maps to nothing (Seen,
 # Acknowledged, OnHold by default) stops counting.
+# v5.17 removed the terminal-title renderer (emoji icons before the session
+# name): the dot replaced them; this renderer keeps the session-name title.
 
 rlog() { log "${RENDER_PID:--}" "    iterm-status: $1"; }
 
@@ -30,7 +33,7 @@ resolve_status() {
 
 render_status() {
   local tmux_session="$1" client_tty="$2"
-  local out="${OSC}state=clear${ST}" pane_id pane_root_pid summary=""
+  local out="${ESC}]0;${tmux_session}${ESC}\\${OSC}state=clear${ST}" pane_id pane_root_pid summary=""
   while read -r pane_id pane_root_pid; do
     [ -n "$pane_root_pid" ] || continue
     local session_dir="$ROOT_DATA_DIR/$pane_root_pid"

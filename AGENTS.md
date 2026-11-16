@@ -26,7 +26,6 @@ agent-notify/
 │   │   ├── sound-bell/
 │   │   ├── sound-tts/
 │   │   ├── iterm-status/
-│   │   ├── terminal-title/
 │   │   ├── tmux-pane-bg/
 │   │   └── template/                    # Non-executable renderer skeleton
 │   └── tmux/tmux-hooks.conf
