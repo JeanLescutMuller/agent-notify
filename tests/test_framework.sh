@@ -242,7 +242,7 @@ test_renderers() {
   export SESSION_TMUX_PANE="%1" SESSION_TMUX_SESSION="test-session" CLIENT_TTY="$tty"
   export AGENT_STATE="Finished" USER_STATE="Pending" AGENT_WD="$PROJECT_DIR" SESSION_NAME=""
   export TRIGGER="AGENT_STATE_UPDATE"
-  export RENDERER_SETTINGS='{"sound-bell":{"Finished":1},"sound-tts":{"Finished":0.7,"name":"renderer-test"},"iterm-status":{"Finished.Pending":"idle"},"tmux-pane-bg":{"Finished.Pending":"#123456"}}'
+  export RENDERER_SETTINGS='{"sound-bell":{"Finished":1},"sound-tts":{"Finished":0.7,"name":"renderer-test"},"iterm-status":{"Finished.Pending":"done","priority":"waiting,done","color.done":"#00d75f"},"tmux-pane-bg":{"Finished.Pending":"#123456"}}'
   log() { printf '%s\n' "$2" >> "$TEST_ROOT/renderer.log"; }
   export -f log
 
@@ -253,15 +253,16 @@ test_renderers() {
   bash "$PROJECT_DIR/release/renderers.d/sound-tts/main" 2>/dev/null || fail "sound-tts executes"
   grep -aqF 'Custom=id=tts:[[volm 0.7]] renderer-test' "$tty" || fail "sound-tts writes iTerm2 sequence"
 
-  # iterm-status: one write = clear every record, then one per counting pane.
+  # iterm-status: one write = title, clear old OSC 7501 records, OSC 21337 dot + subtitle.
   : > "$tty"
   bash "$PROJECT_DIR/release/renderers.d/iterm-status/main" || fail "iterm-status executes"
-  [ "$(cat "$tty")" = $'\033]0;test-session\033\\\033]7501;state=clear\033\\\033]7501;state=idle:app=codex:id=pane1\033\\' ] || \
-    fail "iterm-status writes the title, clears, then one idle record for pane %1"
+  [ "$(cat "$tty")" = $'\033]0;test-session\a\033]7501;state=clear\a\033]21337;status=1 done;indicator=#00d75f;status-color=#00d75f\a' ] || \
+    fail "iterm-status writes the title and a green '1 done' tab status"
   : > "$tty"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Seen' > "$state_root/$render_pid/state.env"
   bash "$PROJECT_DIR/release/renderers.d/iterm-status/main" || fail "iterm-status executes on Seen"
-  [ "$(cat "$tty")" = $'\033]0;test-session\033\\\033]7501;state=clear\033\\' ] || fail "iterm-status drops a Seen pane's record"
+  [ "$(cat "$tty")" = $'\033]0;test-session\a\033]7501;state=clear\a\033]21337;status=;indicator=;status-color=\a' ] || \
+    fail "iterm-status clears the tab status when the only pane is Seen"
   printf '%s\n' 'AGENT_STATE=Finished' 'USER_STATE=Pending' > "$state_root/$render_pid/state.env"
 
   bash "$PROJECT_DIR/release/renderers.d/tmux-pane-bg/main" || fail "tmux-pane-bg executes"

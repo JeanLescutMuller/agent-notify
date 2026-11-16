@@ -2,7 +2,7 @@
 
 **See at a glance which of your Claude Code (or other coding agent) sessions is working, done, or waiting for you, when you run several at once in tmux.**
 
-Agent-neutral terminal notifications for concurrent coding sessions. A small lifecycle API records agent and user state; independent renderers turn that state into tmux pane colors, iTerm2's native tab dot, bells, and optional macOS text-to-speech. The CLI it ships is called `notify`.
+Agent-neutral terminal notifications for concurrent coding sessions. A small lifecycle API records agent and user state; independent renderers turn that state into tmux pane colors, an iTerm2 tab dot and subtitle, bells, and optional macOS text-to-speech. The CLI it ships is called `notify`.
 
 Claude Code support is included, but the core does not depend on Claude's state names or hook format. Other agents can call the same CLI through the generic adapter or add a native adapter.
 
@@ -83,7 +83,7 @@ overrides, then per-session overrides. Reinstalling replaces the app but preserv
 - `sound-bell`: configurable bell count per agent state.
 - `sound-tts`: iTerm2 relay to macOS `say`; see
   [sound-tts installation](release/renderers.d/sound-tts/INSTALL.md).
-- `iterm-status`: iTerm2's native tab dot (OSC 7501), the same one Claude Code shows outside tmux, for every notify-managed pane of the tmux session, and the tab title (the session name); iTerm2 shows the most urgent: blocked (blue) > working (orange) > idle (green). A Seen pane stops counting.
+- `iterm-status`: the iTerm2 tab of a tmux session: a colored dot and a subtitle (iTerm2's OSC 21337 tab status) summing up its notify-managed panes, e.g. "2 waiting · 1 working", and the tab title (the session name). The dot takes the color of the most urgent category: waiting (blue) > working (orange) > done, not seen yet (green) > on hold (purple); a Seen pane stops counting. Categories, order and colors: its `settings.json` (`notify iterm-status color.done=#00ff00 --global`).
 - `tmux-pane-bg`: pane background color by combined agent/user state.
 
 Copy `release/renderers.d/template/` to add another renderer. Renderers receive only normalized

@@ -1,60 +1,69 @@
 #!/bin/bash
 # Renderer: iterm-status
-# The iTerm2 tab of a tmux client: the native dot (OSC 7501 "program status"),
-# one record per notify-managed pane of the tmux session, and the tab title
-# (the tmux session name, OSC 0), written to the tmux client's tty.
+# The iTerm2 tab of a tmux client: a colored dot and a subtitle (OSC 21337
+# "tab status") summing up every notify-managed pane of the tmux session, and
+# the tab title (the tmux session name, OSC 0), written to the client's tty.
 #
-# Why: outside tmux, Claude Code sends OSC 7501 itself and iTerm2 draws a dot in
-# the tab (idle green, working orange, blocked blue). Inside tmux it never does:
-# its startup probe (OSC 7501 ; ?) gets no answer through tmux, and tmux drops
-# the unwrapped sequence anyway (Claude Code 2.1.325, tmux 3.7c, 2026-11-16).
-# iTerm2 merges every record of a tab into one dot, the most urgent winning:
-# blocked > working > idle (measured by the user, iTerm2 3.7.6, 2026-11-16).
+# Why: outside tmux, Claude Code sends iTerm2 OSC 7501 itself (3 fixed dots:
+# idle green, working orange, blocked blue). Inside tmux it never does: its
+# probe (OSC 7501 ; ?) gets no answer through tmux (Claude Code 2.1.325, tmux
+# 3.7c, 2026-11-16). OSC 21337 takes any dot color and a subtitle text, so the
+# dot can also show what Claude cannot: done-but-unseen vs seen, on hold.
 #
-# Each render rewrites the whole set in one write: "state=clear" (drops every
-# record, including those of closed panes), then one record per pane whose
-# state maps to working|blocked|idle. A pane that maps to nothing (Seen,
-# Acknowledged, OnHold by default) stops counting.
-# v5.17 removed the terminal-title renderer (emoji icons before the session
-# name): the dot replaced them; this renderer keeps the session-name title.
+# Each pane maps to a category through settings ("<state>.<user state>", then
+# "<state>"); no mapping (Seen, Acknowledged by default) = the pane does not
+# count. The dot takes the color of the first category in "priority" that has
+# a pane; the subtitle counts every category, e.g. "2 waiting · 1 working".
+# v5.16-v5.17 sent OSC 7501 records instead: each render still clears them.
 
 rlog() { log "${RENDER_PID:--}" "    iterm-status: $1"; }
 
 ESC=$'\033'
-OSC="${ESC}]7501;"
-ST="${ESC}\\"
+BEL=$'\a'
 
-resolve_status() {
-  local cs="$1" us="$2" status
-  status=$(echo "$RENDERER_SETTINGS" | jq -r --arg k "$cs.$us" '."iterm-status"[$k] // empty')
-  [ -n "$status" ] || status=$(echo "$RENDERER_SETTINGS" | jq -r --arg k "$cs" '."iterm-status"[$k] // empty')
-  case "$status" in working|blocked|idle) echo "$status" ;; esac
+setting() { echo "$RENDERER_SETTINGS" | jq -r --arg k "$1" '."iterm-status"[$k] // empty'; }
+
+resolve_category() {
+  local category
+  category=$(setting "$1.$2")
+  [ -n "$category" ] || category=$(setting "$1")
+  echo "$category"
 }
 
 render_status() {
   local tmux_session="$1" client_tty="$2"
-  local out="${ESC}]0;${tmux_session}${ESC}\\${OSC}state=clear${ST}" pane_id pane_root_pid summary=""
+  local categories="" pane_id pane_root_pid
   while read -r pane_id pane_root_pid; do
     [ -n "$pane_root_pid" ] || continue
     local session_dir="$ROOT_DATA_DIR/$pane_root_pid"
     [ -f "$session_dir/static.env" ] || continue
-    local AGENT_TYPE="" AGENT_STATE="" CLAUDE_STATE="" USER_STATE=""
-    source "$session_dir/static.env" 2>/dev/null
+    local AGENT_STATE="" CLAUDE_STATE="" USER_STATE=""
     source "$session_dir/state.env" 2>/dev/null
     AGENT_STATE="${AGENT_STATE:-${CLAUDE_STATE:-}}" # read legacy v4 state files
     [ -n "$AGENT_STATE" ] || continue
-
-    local status app id
-    status=$(resolve_status "$AGENT_STATE" "$USER_STATE")
-    [ -n "$status" ] || { rlog "no dot pid=$pane_root_pid agent_state=$AGENT_STATE user_state=$USER_STATE"; continue; }
-    app="${AGENT_TYPE:-agent}"; [ "$app" = "claude" ] && app="claude-code"
-    id="pane${pane_id#%}"   # OSC 7501 ids: [A-Za-z0-9_.+-]
-    out+="${OSC}state=${status}:app=${app}:id=${id}${ST}"
-    summary+=" $id=$status"
+    local category
+    category=$(resolve_category "$AGENT_STATE" "$USER_STATE")
+    rlog "pane=$pane_id agent_state=$AGENT_STATE user_state=$USER_STATE category=${category:-none}"
+    [ -n "$category" ] && categories+="$category"$'\n'
   done < <(tmux list-panes -s -t "$tmux_session" -F '#{pane_id} #{pane_pid}' 2>/dev/null)
 
-  rlog "session=$tmux_session records:${summary:- none}"
-  printf '%s' "$out" > "$client_tty"
+  local top="" text="" category count
+  local IFS=','
+  for category in $(setting priority); do
+    count=$(printf '%s' "$categories" | grep -cx "$category")
+    [ "$count" -gt 0 ] || continue
+    [ -n "$top" ] || top="$category"
+    text+="${text:+ · }$count $category"
+  done
+  unset IFS
+
+  local tab_status="status=;indicator=;status-color="
+  if [ -n "$top" ]; then
+    local color; color=$(setting "color.$top")
+    tab_status="status=$text;indicator=$color;status-color=$color"
+  fi
+  rlog "session=$tmux_session $tab_status"
+  printf '%s' "${ESC}]0;${tmux_session}${BEL}${ESC}]7501;state=clear${BEL}${ESC}]21337;${tab_status}${BEL}" > "$client_tty"
 }
 
 case "$TRIGGER" in

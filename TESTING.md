@@ -130,15 +130,15 @@ NOTIFY_RENDER_PID="$render_pid" notify event Idle
 
 Expected default visuals:
 
-| State | Pane background | iTerm2 tab dot |
+| State | Pane background | iTerm2 tab dot (category) |
 |---|---|---|
 | `Working` | `#0a1028` | orange (working) |
-| `WaitingForUser` | `#2e2e0a` | blue (blocked) |
-| `Finished.Pending` | `#0a2e0a` | green (idle) |
+| `WaitingForUser` | `#2e2e0a` | blue (waiting) |
+| `Finished.Pending` | `#0a2e0a` | green (done) |
 | `Finished.Seen` | default | none |
 | `Finished.Acknowledged` | default | none |
-| `Finished.OnHold` | `#200a1a` | none |
-| `Idle.Pending` | `#0a2e0a` | green (idle) |
+| `Finished.OnHold` | `#200a1a` | purple (on hold) |
+| `Idle.Pending` | `#0a2e0a` | green (done) |
 
 Verify the actual tmux options, independently of what the pane looks like:
 

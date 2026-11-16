@@ -1,6 +1,13 @@
 {
   "Working": "working",
-  "WaitingForUser": "blocked",
-  "Finished.Pending": "idle",
-  "Idle.Pending": "idle"
+  "WaitingForUser": "waiting",
+  "Finished.Pending": "done",
+  "Idle.Pending": "done",
+  "Finished.OnHold": "on hold",
+  "Idle.OnHold": "on hold",
+  "priority": "waiting,working,done,on hold",
+  "color.waiting": "#5f87ff",
+  "color.working": "#ff9500",
+  "color.done": "#00d75f",
+  "color.on hold": "#af5fff"
 }
