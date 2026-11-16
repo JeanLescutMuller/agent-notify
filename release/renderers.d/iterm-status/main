@@ -1,0 +1,63 @@
+#!/bin/bash
+# Renderer: iterm-status
+# iTerm2's native tab dot (OSC 7501 "program status"), one record per
+# notify-managed pane of the tmux session, written to the tmux client's tty.
+#
+# Why: outside tmux, Claude Code sends OSC 7501 itself and iTerm2 draws a dot in
+# the tab (idle green, working orange, blocked blue). Inside tmux it never does:
+# its startup probe (OSC 7501 ; ?) gets no answer through tmux, and tmux drops
+# the unwrapped sequence anyway (Claude Code 2.1.325, tmux 3.7c, 2026-11-16).
+# iTerm2 merges every record of a tab into one dot, the most urgent winning:
+# blocked > working > idle (measured by the user, iTerm2 3.7.6, 2026-11-16).
+#
+# Each render rewrites the whole set in one write: "state=clear" (drops every
+# record, including those of closed panes), then one record per pane whose
+# state maps to working|blocked|idle. A pane that maps to nothing (Seen,
+# Acknowledged, OnHold by default) stops counting.
+
+rlog() { log "${RENDER_PID:--}" "    iterm-status: $1"; }
+
+ESC=$'\033'
+OSC="${ESC}]7501;"
+ST="${ESC}\\"
+
+resolve_status() {
+  local cs="$1" us="$2" status
+  status=$(echo "$RENDERER_SETTINGS" | jq -r --arg k "$cs.$us" '."iterm-status"[$k] // empty')
+  [ -n "$status" ] || status=$(echo "$RENDERER_SETTINGS" | jq -r --arg k "$cs" '."iterm-status"[$k] // empty')
+  case "$status" in working|blocked|idle) echo "$status" ;; esac
+}
+
+render_status() {
+  local tmux_session="$1" client_tty="$2"
+  local out="${OSC}state=clear${ST}" pane_id pane_root_pid summary=""
+  while read -r pane_id pane_root_pid; do
+    [ -n "$pane_root_pid" ] || continue
+    local session_dir="$ROOT_DATA_DIR/$pane_root_pid"
+    [ -f "$session_dir/static.env" ] || continue
+    local AGENT_TYPE="" AGENT_STATE="" CLAUDE_STATE="" USER_STATE=""
+    source "$session_dir/static.env" 2>/dev/null
+    source "$session_dir/state.env" 2>/dev/null
+    AGENT_STATE="${AGENT_STATE:-${CLAUDE_STATE:-}}" # read legacy v4 state files
+    [ -n "$AGENT_STATE" ] || continue
+
+    local status app id
+    status=$(resolve_status "$AGENT_STATE" "$USER_STATE")
+    [ -n "$status" ] || { rlog "no dot pid=$pane_root_pid agent_state=$AGENT_STATE user_state=$USER_STATE"; continue; }
+    app="${AGENT_TYPE:-agent}"; [ "$app" = "claude" ] && app="claude-code"
+    id="pane${pane_id#%}"   # OSC 7501 ids: [A-Za-z0-9_.+-]
+    out+="${OSC}state=${status}:app=${app}:id=${id}${ST}"
+    summary+=" $id=$status"
+  done < <(tmux list-panes -s -t "$tmux_session" -F '#{pane_id} #{pane_pid}' 2>/dev/null)
+
+  rlog "session=$tmux_session records:${summary:- none}"
+  printf '%s' "$out" > "$client_tty"
+}
+
+case "$TRIGGER" in
+  AGENT_STATE_UPDATE|USER_STATE_UPDATE|REFRESH)
+    [ -n "$SESSION_TMUX_SESSION" ] || { rlog "skip (no tmux session)"; exit 0; }
+    [ -n "$CLIENT_TTY" ] && [ -e "$CLIENT_TTY" ] || { rlog "skip (no client tty)"; exit 0; }
+    render_status "$SESSION_TMUX_SESSION" "$CLIENT_TTY"
+    ;;
+esac

@@ -95,7 +95,7 @@ input, native environment variables, or transcript formats.
 |---|---|---|---|
 | `SHELL_PID` | `resolve_client_tty` fallback (`ps -o tty=`), each render | dropped | `RENDER_PID` (the folder name) |
 | `SESSION_TMUX_PANE` | `tmux-pane-bg`, `sound-tts` (pane title), each render | dropped | `tmux list-panes -a`: the pane whose `pane_pid` is `RENDER_PID`; else the invoking process's `$TMUX_PANE` (its own shell only); else agent-tracker's `pane_id`, if tmux still has that pane |
-| `SESSION_TMUX_SESSION` | `terminal-title`, `resolve_client_tty`, each render | dropped | same tmux line (`session_name`); a copy went stale on `tmux rename-session` (2026-08-18) |
+| `SESSION_TMUX_SESSION` | `terminal-title`, `iterm-status`, `resolve_client_tty`, each render | dropped | same tmux line (`session_name`); a copy went stale on `tmux rename-session` (2026-08-18) |
 | `SESSION_TMUX_WINDOW` | no renderer (renderer contract only) | dropped | same tmux line (`window_id`) |
 | `AGENT_WD` | `sound-tts` name fallback, `status` | dropped | the invoking hook's context (`CLAUDE_PROJECT_DIR`, Codex stdin `cwd`) when it is this very session; else agent-tracker's `cwd`; else tmux `pane_current_path` |
 | `AGENT_PID` | `status` only | dropped | invoking context; else agent-tracker's `pid` if alive; `status` then asks the adapter's process-tree lookup |

@@ -30,7 +30,7 @@ printf '%s\n' '#!/bin/bash' \
   '    esac ;;' \
   'esac' > "$TEST_ROOT/bin/tmux"
 chmod +x "$TEST_ROOT/bin/jq" "$TEST_ROOT/bin/tmux"
-for renderer in sound-bell terminal-title tmux-pane-bg; do
+for renderer in iterm-status sound-bell terminal-title tmux-pane-bg; do
   mkdir -p "$TEST_ROOT/config/renderers.d/$renderer"
   printf '{"enabled":false}\n' > "$TEST_ROOT/config/renderers.d/$renderer/settings.json"
 done

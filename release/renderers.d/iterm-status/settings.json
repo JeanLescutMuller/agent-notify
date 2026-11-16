@@ -1,0 +1,6 @@
+{
+  "Working": "working",
+  "WaitingForUser": "blocked",
+  "Finished.Pending": "idle",
+  "Idle.Pending": "idle"
+}

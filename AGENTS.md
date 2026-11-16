@@ -25,6 +25,7 @@ agent-notify/
 │   ├── renderers.d/
 │   │   ├── sound-bell/
 │   │   ├── sound-tts/
+│   │   ├── iterm-status/
 │   │   ├── terminal-title/
 │   │   ├── tmux-pane-bg/
 │   │   └── template/                    # Non-executable renderer skeleton

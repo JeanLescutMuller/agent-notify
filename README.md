@@ -83,7 +83,8 @@ overrides, then per-session overrides. Reinstalling replaces the app but preserv
 - `sound-bell`: configurable bell count per agent state.
 - `sound-tts`: iTerm2 relay to macOS `say`; see
   [sound-tts installation](release/renderers.d/sound-tts/INSTALL.md).
-- `terminal-title`: aggregated state icons for every notify-managed pane in a tmux session.
+- `iterm-status`: iTerm2's native tab dot (OSC 7501), the same one Claude Code shows outside tmux, for every notify-managed pane of the tmux session; iTerm2 shows the most urgent: blocked (blue) > working (orange) > idle (green). A Seen pane stops counting.
+- `terminal-title`: tab title = the tmux session name; state icons in front of it only if configured (none by default since v5.16, the dot replaced them).
 - `tmux-pane-bg`: pane background color by combined agent/user state.
 
 Copy `release/renderers.d/template/` to add another renderer. Renderers receive only normalized
