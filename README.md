@@ -72,7 +72,7 @@ Examples:
 ```bash
 notify sound-tts disable --global
 notify sound-bell Finished=2
-notify tmux-pane-bg Finished.Pending=#0a2e0a --global
+notify tmux-pane-bg Finished.Pending=#002b13 --global
 ```
 
 Settings merge in this order: renderer defaults from the deployed app, persistent global
@@ -84,7 +84,9 @@ overrides, then per-session overrides. Reinstalling replaces the app but preserv
 - `sound-tts`: iTerm2 relay to macOS `say`; see
   [sound-tts installation](release/renderers.d/sound-tts/INSTALL.md).
 - `iterm-status`: the iTerm2 tab of a tmux session: a colored dot and a subtitle (iTerm2's OSC 21337 tab status) summing up its notify-managed panes, e.g. "2 waiting · 1 working", and the tab title (the session name). The dot takes the color of the most urgent category: waiting (blue) > working (orange) > done, not seen yet (green) > on hold (purple); a Seen pane stops counting. Categories, order and colors: its `settings.json` (`notify iterm-status color.done=#00ff00 --global`).
-- `tmux-pane-bg`: pane background color by combined agent/user state.
+- `tmux-pane-bg`: pane background color by combined agent/user state, a dark shade (20 %) of the same category's tab dot color: waiting `#131b33`, working `#331e00`, done `#002b13`, on hold `#231333`; Seen/Acknowledged: the terminal's own background.
+
+One color code everywhere, Claude Code's own (its OSC 21337 colors): waiting = blue `#5f87ff`, working = orange `#ff9500`, done = green `#00d75f`; on hold = purple `#af5fff` (agent-notify's own). The tmux menu (prefix + n): ⚫ Acknowledge (no color), ⚪ Pending (back to its state's color), 🟣 On Hold.
 
 Copy `release/renderers.d/template/` to add another renderer. Renderers receive only normalized
 environment variables; agent-native parsing belongs in `adapters.d/`.

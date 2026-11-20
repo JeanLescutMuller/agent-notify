@@ -54,7 +54,7 @@ for key in AGENT_TYPE AGENT_SESSION_ID SESSION_NAME; do
   grep -q "^$key=" "$ROOT/$PANE_PID/static.env" || fail "static.env keeps $key"
 done
 hook "$PANE_PID" event Working
-[ "$(pane_style)" = "bg=#0a1028" ] || fail "Working colors the pane found by shell PID (got '$(pane_style)')"
+[ "$(pane_style)" = "bg=#331e00" ] || fail "Working colors the pane found by shell PID (got '$(pane_style)')"
 plain "$PANE_PID" status > "$TEST_ROOT/s1"
 [ "$(status_field TMUX_PANE < "$TEST_ROOT/s1")" = "$PANE_ID" ] || fail "status shows the derived pane"
 [ "$(status_field TMUX_SESSION < "$TEST_ROOT/s1")" = "derive test" ] || fail "status shows the derived tmux session (with its space)"
@@ -114,7 +114,7 @@ TEST_PIDS="$TEST_PIDS $SHELL2"
 mkdir -p "$TRACKER/data/sessions/claude-other"
 notify_as "$SHELL2" env CLAUDE_CODE_SESSION_ID=claude-other TMUX_PANE="$PANE_ID" bash "$NOTIFY" session-start 2>/dev/null
 notify_as "$SHELL2" env CLAUDE_CODE_SESSION_ID=claude-other TMUX_PANE="$PANE_ID" bash "$NOTIFY" event Finished 2>/dev/null </dev/null
-[ "$(pane_style)" = "bg=#0a2e0a" ] || fail "\$TMUX_PANE of the invoking hook colors its pane (got '$(pane_style)')"
+[ "$(pane_style)" = "bg=#002b13" ] || fail "\$TMUX_PANE of the invoking hook colors its pane (got '$(pane_style)')"
 plain "$SHELL2" status > "$TEST_ROOT/s5"
 [ "$(status_field TMUX_PANE < "$TEST_ROOT/s5")" = "(none)" ] || fail "without agent-tracker or \$TMUX_PANE no pane is invented"
 jq -cn --arg pane "$PANE_ID" '{pane_id:$pane}' > "$TRACKER/data/sessions/claude-other/last_seen.json"

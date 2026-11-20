@@ -15,7 +15,7 @@
 
 # --- shared variables and functions ----------------------
 
-NOTIFY_VERSION="5.19"  # hardcoded; bump manually per notable change
+NOTIFY_VERSION="5.20"  # hardcoded; bump manually per notable change
 
 # Fallbacks fed to renderers by a DELIBERATE state action - update_state_and_render
 # (notify update / event / tmux-menu toggle / user-focus) and cmd_settings - never by
