@@ -1,6 +1,6 @@
 # agent-notify development guide
 
-Development home: NAS (moving: until the move, edit it on the Mac; task D3). Why (U19, the user, 2026-11-22): the NAS by default; its Mac parts are installed on the Mac from GitHub with one command.
+Development home: NAS (`~/dev/agent-notify` on the NAS, since 2026-11-22; no copy on the Mac: `tm agent-notify` opens it). Why (U19, the user, 2026-11-22): the NAS by default; its Mac parts are installed on the Mac from GitHub with one command: `dev-install agent-notify` (my-setup).
 
 agent-notify is an agent-neutral terminal notification system. The core tracks normalized agent and
 user state; adapters translate native agent context, and renderers provide visual/audio output.
