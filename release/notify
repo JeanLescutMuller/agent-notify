@@ -157,7 +157,9 @@ deploy_managed_block() {
     return 0
   fi
 
-  [ -f "$target" ] && cp "$target" "${target}.bak.$(date +%Y%m%d_%H%M%S)"
+  # One backup, the version before the last deploy, overwritten each time (a timestamped one per deploy made
+  # 184 on the Mac by 2026-11-23: my-setup's bootstrap.sh copies tmux.conf without the block, then calls notify init)
+  [ -f "$target" ] && cp "$target" "${target}.bak.notify"
 
   if [ -f "$target" ] && grep -qF "$top" "$target"; then
     awk -v top="$top" '

@@ -61,8 +61,9 @@ backup_count() { ls "$HOME_DIR"/.tmux.conf.bak.* 2>/dev/null | wc -l | tr -d ' '
 # --- fresh deploy on a file with no block at all ---------------------------
 # deploy_managed_block backs up the target whenever it already EXISTS,
 # regardless of whether it already contains a block - so deploying onto a
-# pre-existing but block-less file does create one backup (of the pre-block
+# pre-existing but block-less file does create the backup (of the pre-block
 # content); only deploying onto a file that doesn't exist yet skips it.
+# There is only ever one backup, <target>.bak.notify, overwritten by each deploy.
 rm -f "$TMUX_CONF"
 echo "# a user's own unrelated tmux config" > "$TMUX_CONF"
 before_backups=$(backup_count)
@@ -70,8 +71,9 @@ run_init >/dev/null 2>&1
 grep -qF '# ┌─ AGENT-NOTIFY BLOCK' "$TMUX_CONF" || fail "init deploys the block on first run"
 grep -qF "$(printf '%s' "$hooks_content" | head -1)" "$TMUX_CONF" || fail "the deployed block contains the real hooks content"
 grep -qF "a user's own unrelated tmux config" "$TMUX_CONF" || fail "content outside the block is preserved"
-[ "$(backup_count)" = "$((before_backups + 1))" ] || \
-  fail "deploying the first block onto an existing file backs up that pre-block content once"
+[ "$(backup_count)" = 1 ] || fail "deploying the first block onto an existing file makes one backup (now $(backup_count))"
+[ "$(cat "$TMUX_CONF.bak.notify")" = "# a user's own unrelated tmux config" ] || \
+  fail "the backup holds the pre-block content"
 before_deploy="$(cat "$TMUX_CONF")"
 pass "notify init: fresh deploy onto an unrelated existing file"
 
@@ -83,18 +85,13 @@ after_redeploy="$(cat "$TMUX_CONF")"
 [ "$(backup_count)" = "$before_backups" ] || fail "an unchanged redeploy must not create a new backup"
 pass "notify init: redeploying identical content is a true no-op"
 
-# --- content change: exactly one new backup, block replaced ----------------
-# Backup filenames are only second-granularity (.bak.<YYYYMMDD_HHMMSS>) - a
-# `sleep 1` guarantees this backup lands in a distinct second from the one
-# the previous step created, rather than silently overwriting it.
-sleep 1
-before_backups=$(backup_count)
+# --- content change: the one backup now holds the previous version --------
 printf '\n# a deliberately added test hook line\n' >> "$release_copy/tmux/tmux-hooks.conf"
 run_init >/dev/null 2>&1
-[ "$(backup_count)" = "$((before_backups + 1))" ] || \
-  fail "a real content change creates exactly one new backup (had $before_backups, now $(backup_count))"
+[ "$(backup_count)" = 1 ] || fail "a real content change keeps a single backup (now $(backup_count))"
+[ "$(cat "$TMUX_CONF.bak.notify")" = "$before_deploy" ] || fail "the backup is overwritten with the previous version"
 grep -qF 'a deliberately added test hook line' "$TMUX_CONF" || fail "the new content is actually deployed"
-pass "notify init: a real content change replaces the block and backs up exactly once"
+pass "notify init: a real content change replaces the block; the single backup holds the previous version"
 
 # --- hand-edited block is refused, not clobbered ---------------------------
 sed -i.orig 's/user-focus"$/user-focus-HAND-EDITED"/' "$TMUX_CONF"
